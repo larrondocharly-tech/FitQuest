@@ -4,7 +4,7 @@
 Build a clean Next.js (App Router) web app named "FitQuest" with Supabase Auth (email+password) and protected routes.
 
 ## Hard rules
-- Do NOT call Supabase REST auth endpoints directly (NO fetch to /auth/v1/token).
+- Do NOT call Supabase REST auth endpoints directly (NO fetch to Supabase auth token endpoint).
 - Use supabase-js v2 for auth: signInWithPassword, signUp, signOut, getSession, onAuthStateChange.
 - Keep changes minimal and consistent. Prefer simple file structure.
 - Ensure .env.local is documented and uses NEXT_PUBLIC_ keys only on client.

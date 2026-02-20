@@ -1,31 +1,30 @@
-import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { NextResponse } from 'next/server';
+import { createMiddlewareSupabase } from '@/lib/supabase/middleware';
 
-const protectedPrefixes = ['/dashboard', '/onboarding'];
+const protectedPrefixes = ['/dashboard', '/onboarding', '/app'];
 
-function hasSessionCookie(request: NextRequest) {
-  return request.cookies
-    .getAll()
-    .some((cookie) => cookie.name.startsWith('sb-') && cookie.name.includes('auth-token'));
-}
-
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const isProtected = protectedPrefixes.some((prefix) => pathname.startsWith(prefix));
   const isAuthPage = pathname.startsWith('/auth');
-  const loggedIn = hasSessionCookie(request);
 
-  if (isProtected && !loggedIn) {
+  const { supabase, res } = createMiddlewareSupabase(request);
+  const {
+    data: { user }
+  } = await supabase.auth.getUser();
+
+  if (!user && isProtected) {
     return NextResponse.redirect(new URL('/auth', request.url));
   }
 
-  if (isAuthPage && loggedIn) {
+  if (user && isAuthPage) {
     return NextResponse.redirect(new URL('/dashboard', request.url));
   }
 
-  return NextResponse.next();
+  return res;
 }
 
 export const config = {
-  matcher: ['/auth', '/dashboard/:path*', '/onboarding/:path*']
+  matcher: ['/auth', '/dashboard/:path*', '/onboarding/:path*', '/app/:path*']
 };

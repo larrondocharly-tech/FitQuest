@@ -2,21 +2,23 @@
 
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabaseClient';
+import { createBrowserSupabase } from '@/lib/supabase/browser';
+
+const supabase = createBrowserSupabase();
 
 export default function HomePage() {
   const router = useRouter();
 
   useEffect(() => {
-    const checkSession = async () => {
+    const checkUser = async () => {
       const {
-        data: { session }
-      } = await supabase.auth.getSession();
+        data: { user }
+      } = await supabase.auth.getUser();
 
-      router.replace(session ? '/dashboard' : '/auth');
+      router.replace(user ? '/dashboard' : '/auth');
     };
 
-    checkSession();
+    checkUser();
   }, [router]);
 
   return <p className="text-slate-300">Chargement de votre aventure...</p>;

@@ -2,9 +2,11 @@
 
 import { FormEvent, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabaseClient';
+import { createBrowserSupabase } from '@/lib/supabase/browser';
 
 type Tab = 'login' | 'signup';
+
+const supabase = createBrowserSupabase();
 
 export default function AuthPage() {
   const router = useRouter();
@@ -12,20 +14,52 @@ export default function AuthPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  const redirectFromProfileState = async (userId: string) => {
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('hero_name')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (profileError) {
+      setError(profileError.message);
+      return;
+    }
+
+    router.push(profile?.hero_name ? '/dashboard' : '/onboarding');
+  };
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    setInfo(null);
 
-    const action =
-      tab === 'login'
-        ? supabase.auth.signInWithPassword({ email, password })
-        : supabase.auth.signUp({ email, password });
+    if (tab === 'signup') {
+      const { data, error: authError } = await supabase.auth.signUp({ email, password });
+      setLoading(false);
 
-    const { error: authError } = await action;
+      if (authError) {
+        setError(authError.message);
+        return;
+      }
 
+      if (!data.session) {
+        setInfo('Vérifie tes emails');
+        return;
+      }
+
+      if (data.user) {
+        router.push('/onboarding');
+      }
+
+      return;
+    }
+
+    const { data, error: authError } = await supabase.auth.signInWithPassword({ email, password });
     setLoading(false);
 
     if (authError) {
@@ -33,7 +67,12 @@ export default function AuthPage() {
       return;
     }
 
-    router.push('/dashboard');
+    if (!data.user) {
+      setError('Connexion impossible. Réessaie.');
+      return;
+    }
+
+    await redirectFromProfileState(data.user.id);
   };
 
   return (
@@ -84,6 +123,7 @@ export default function AuthPage() {
           </div>
 
           {error ? <p className="rounded-md border border-red-500/30 bg-red-900/20 p-2 text-sm text-red-200">{error}</p> : null}
+          {info ? <p className="rounded-md border border-emerald-500/30 bg-emerald-900/20 p-2 text-sm text-emerald-200">{info}</p> : null}
 
           <button
             className="w-full rounded-lg bg-violet-600 px-4 py-2 font-semibold text-white transition hover:bg-violet-500 disabled:opacity-60"

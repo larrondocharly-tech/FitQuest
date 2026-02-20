@@ -2,7 +2,7 @@
 
 import { FormEvent, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { createBrowserSupabase } from '@/lib/supabase/browser';
+import { supabase } from '@/lib/supabaseClient';
 
 type Tab = 'login' | 'signup';
 
@@ -11,7 +11,6 @@ type SessionTokens = {
   refresh_token: string;
 };
 
-const supabase = createBrowserSupabase();
 
 function extractError(json: unknown): string {
   if (!json || typeof json !== 'object') {

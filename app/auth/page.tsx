@@ -11,7 +11,6 @@ type SessionTokens = {
   refresh_token: string;
 };
 
-
 function extractError(json: unknown): string {
   if (!json || typeof json !== 'object') {
     return 'Une erreur est survenue. Réessaie.';
@@ -56,17 +55,28 @@ function extractSession(json: unknown): SessionTokens | null {
     };
   };
 
-  const sessionCandidate = payload.session ?? payload;
+  if (payload.session) {
+    if (
+      typeof payload.session.access_token === 'string' &&
+      typeof payload.session.refresh_token === 'string' &&
+      payload.session.access_token &&
+      payload.session.refresh_token
+    ) {
+      return payload.session;
+    }
+
+    return null;
+  }
 
   if (
-    typeof sessionCandidate.access_token === 'string' &&
-    typeof sessionCandidate.refresh_token === 'string' &&
-    sessionCandidate.access_token &&
-    sessionCandidate.refresh_token
+    typeof payload.access_token === 'string' &&
+    typeof payload.refresh_token === 'string' &&
+    payload.access_token &&
+    payload.refresh_token
   ) {
     return {
-      access_token: sessionCandidate.access_token,
-      refresh_token: sessionCandidate.refresh_token
+      access_token: payload.access_token,
+      refresh_token: payload.refresh_token
     };
   }
 
@@ -103,14 +113,20 @@ export default function AuthPage() {
     setError(null);
     setInfo(null);
 
-    const endpoint = tab === 'signup' ? '/api/auth/signup' : '/api/auth/login';
-
     try {
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password })
-      });
+      const response =
+        tab === 'signup'
+          ? await fetch('/api/auth/signup', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email, password })
+            })
+          : await fetch('/api/auth/login', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email, password })
+            });
+
       const json = (await response.json()) as unknown;
 
       if (!response.ok) {
@@ -130,7 +146,10 @@ export default function AuthPage() {
         return;
       }
 
-      const { error: sessionError } = await supabase.auth.setSession(session);
+      const { error: sessionError } = await supabase.auth.setSession({
+        access_token: session.access_token,
+        refresh_token: session.refresh_token
+      });
 
       if (sessionError) {
         setError(sessionError.message);

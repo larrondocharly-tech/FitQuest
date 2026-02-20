@@ -2,11 +2,76 @@
 
 import { FormEvent, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { createBrowserSupabase } from '@/lib/supabase/browser';
+import { supabase } from '@/lib/supabaseClient';
 
 type Tab = 'login' | 'signup';
 
-const supabase = createBrowserSupabase();
+type SessionTokens = {
+  access_token: string;
+  refresh_token: string;
+};
+
+
+function extractError(json: unknown): string {
+  if (!json || typeof json !== 'object') {
+    return 'Une erreur est survenue. Réessaie.';
+  }
+
+  const payload = json as {
+    error?: { message?: string } | string;
+    msg?: string;
+    message?: string;
+  };
+
+  if (typeof payload.error === 'string' && payload.error) {
+    return payload.error;
+  }
+
+  if (payload.error && typeof payload.error === 'object' && typeof payload.error.message === 'string') {
+    return payload.error.message;
+  }
+
+  if (typeof payload.msg === 'string' && payload.msg) {
+    return payload.msg;
+  }
+
+  if (typeof payload.message === 'string' && payload.message) {
+    return payload.message;
+  }
+
+  return 'Une erreur est survenue. Réessaie.';
+}
+
+function extractSession(json: unknown): SessionTokens | null {
+  if (!json || typeof json !== 'object') {
+    return null;
+  }
+
+  const payload = json as {
+    access_token?: unknown;
+    refresh_token?: unknown;
+    session?: {
+      access_token?: unknown;
+      refresh_token?: unknown;
+    };
+  };
+
+  const sessionCandidate = payload.session ?? payload;
+
+  if (
+    typeof sessionCandidate.access_token === 'string' &&
+    typeof sessionCandidate.refresh_token === 'string' &&
+    sessionCandidate.access_token &&
+    sessionCandidate.refresh_token
+  ) {
+    return {
+      access_token: sessionCandidate.access_token,
+      refresh_token: sessionCandidate.refresh_token
+    };
+  }
+
+  return null;
+}
 
 export default function AuthPage() {
   const router = useRouter();
@@ -38,41 +103,55 @@ export default function AuthPage() {
     setError(null);
     setInfo(null);
 
-    if (tab === 'signup') {
-      const { data, error: authError } = await supabase.auth.signUp({ email, password });
+    const endpoint = tab === 'signup' ? '/api/auth/signup' : '/api/auth/login';
+
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      const json = (await response.json()) as unknown;
+
+      if (!response.ok) {
+        setError(extractError(json));
+        return;
+      }
+
+      const session = extractSession(json);
+
+      if (!session) {
+        if (tab === 'signup') {
+          setInfo('Vérifie tes emails');
+          return;
+        }
+
+        setError('Connexion impossible. Réessaie.');
+        return;
+      }
+
+      const { error: sessionError } = await supabase.auth.setSession(session);
+
+      if (sessionError) {
+        setError(sessionError.message);
+        return;
+      }
+
+      const {
+        data: { user }
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        setError('Connexion impossible. Réessaie.');
+        return;
+      }
+
+      await redirectFromProfileState(user.id);
+    } catch {
+      setError('Impossible de contacter le serveur. Réessaie.');
+    } finally {
       setLoading(false);
-
-      if (authError) {
-        setError(authError.message);
-        return;
-      }
-
-      if (!data.session) {
-        setInfo('Vérifie tes emails');
-        return;
-      }
-
-      if (data.user) {
-        router.push('/onboarding');
-      }
-
-      return;
     }
-
-    const { data, error: authError } = await supabase.auth.signInWithPassword({ email, password });
-    setLoading(false);
-
-    if (authError) {
-      setError(authError.message);
-      return;
-    }
-
-    if (!data.user) {
-      setError('Connexion impossible. Réessaie.');
-      return;
-    }
-
-    await redirectFromProfileState(data.user.id);
   };
 
   return (

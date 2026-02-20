@@ -2,9 +2,8 @@
 
 import { FormEvent, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { createBrowserSupabase } from '@/lib/supabase/browser';
+import { supabase } from '@/lib/supabaseClient';
 
-const supabase = createBrowserSupabase();
 
 export default function OnboardingPage() {
   const router = useRouter();
@@ -49,7 +48,7 @@ export default function OnboardingPage() {
   return (
     <section className="mx-auto max-w-xl rounded-xl border border-slate-800 bg-slate-900/60 p-6">
       <h2 className="mb-2 text-2xl font-semibold">Création du héros</h2>
-      <p className="mb-6 text-slate-300">Forge ton identité FitQuest pour démarrer l'aventure.</p>
+      <p className="mb-6 text-slate-300">Forge ton identité FitQuest pour démarrer l&apos;aventure.</p>
 
       <form className="space-y-4" onSubmit={handleSubmit}>
         <div>

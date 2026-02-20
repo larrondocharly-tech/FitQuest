@@ -47,4 +47,19 @@ Cela crée :
 - Auth côté client via `@supabase/supabase-js`.
 - Clients SSR/middleware via `@supabase/ssr`.
 - Middleware vérifie `supabase.auth.getUser()` (pas `getSession()`) et redirige selon l'état auth.
-- Aucun appel `fetch` direct vers `https://*.supabase.co/auth/v1/token`.
+- Aucun appel direct du navigateur vers les endpoints Auth Supabase.
+
+## Fix CORS cache issues
+
+Si vous voyez encore des erreurs CORS après les changements d'authentification :
+
+1. Stop dev server
+2. Delete .next folder
+3. Restart npm run dev
+
+Exemple :
+
+```bash
+rm -rf .next
+npm run dev
+```

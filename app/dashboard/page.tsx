@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { createBrowserSupabase } from '@/lib/supabase/browser';
+import { supabase } from '@/lib/supabaseClient';
 
 type Profile = {
   email: string | null;
@@ -12,7 +12,6 @@ type Profile = {
   level: number | null;
 };
 
-const supabase = createBrowserSupabase();
 
 export default function DashboardPage() {
   const router = useRouter();

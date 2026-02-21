@@ -580,6 +580,8 @@ export default function PlanPage() {
     }
 
     const setNumber = (sessionLogsCount[key] ?? 0) + 1;
+    const selectedDayIndexValue = Number(selectedDayIndex);
+    const safeDayIndex = Number.isFinite(selectedDayIndexValue) ? selectedDayIndexValue : 1;
     const recommendedRest = focusedExercise.classType === 'poly' ? 120 : focusedExercise.classType === 'iso' ? 90 : 90;
     const safeExerciseName = focusedExercise.displayName?.trim() || focusedExercise.exercise_name?.trim() || focusedExercise.exercise_key?.trim() || 'Exercice';
 
@@ -590,6 +592,7 @@ export default function PlanPage() {
       user_id: user.id,
       session_id: sessionId,
       plan_id: activePlanId,
+      day_index: safeDayIndex,
       exercise_key: focusedExercise.exercise_key,
       exercise_name: safeExerciseName,
       equipment_type: focusedExercise.equipment_type,

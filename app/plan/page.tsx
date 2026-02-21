@@ -4,7 +4,6 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
-import RestTimer from '@/components/RestTimer';
 import { generatePlan, type EquipmentType, type GeneratedPlan, type Goal, type Location, type TrainingLevel, type UserPrefs } from '@/lib/plan/generatePlan';
 import { getLastPerformance, recommendWeight, type ExerciseLogForProgression, type Recommendation, xpToLevel } from '@/lib/progression/recommendWeight';
 import { getCycleWeek, weekStart } from '@/lib/cycle/cycle';
@@ -74,6 +73,14 @@ type ExerciseItem = {
   classType: 'poly' | 'iso' | 'other';
 };
 
+type RestModalProps = {
+  open: boolean;
+  title: string;
+  recommendedSeconds: number;
+  onNext: () => void;
+  onClose?: () => void;
+};
+
 const defaultPrefs: ProfilePrefs = {
   hero_name: null,
   hero_class: 'Warrior',
@@ -130,6 +137,69 @@ const addDays = (date: Date, days: number): Date => {
   return next;
 };
 
+const formatSeconds = (seconds: number): string => {
+  const total = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(total / 60);
+  const remaining = total % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(remaining).padStart(2, '0')}`;
+};
+
+const RestModal = ({ open, title, recommendedSeconds, onNext, onClose }: RestModalProps) => {
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [isPaused, setIsPaused] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setElapsedSeconds(0);
+    setIsPaused(false);
+  }, [open, recommendedSeconds]);
+
+  useEffect(() => {
+    if (!open || isPaused) return;
+    const interval = window.setInterval(() => {
+      setElapsedSeconds((prev) => prev + 1);
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, [open, isPaused]);
+
+  if (!open) return null;
+
+  const remainingSeconds = recommendedSeconds - elapsedSeconds;
+  const hasReachedTarget = remainingSeconds <= 0;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-3 sm:items-center sm:p-4">
+      <div className="w-full max-w-md rounded-xl border border-slate-700 bg-slate-900 p-4 shadow-xl sm:p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-xs uppercase tracking-wide text-slate-400">Temps de repos</p>
+            <h3 className="text-lg font-semibold text-slate-100">{title}</h3>
+          </div>
+          {onClose ? <button aria-label="Fermer" className="rounded-md px-2 py-1 text-slate-300" onClick={onClose} type="button">✕</button> : null}
+        </div>
+
+        <p className="mt-2 text-sm text-slate-300">Repos conseillé: {formatSeconds(recommendedSeconds)}</p>
+        <p className="mt-4 text-center font-mono text-4xl font-bold text-violet-300">{formatSeconds(Math.abs(remainingSeconds))}</p>
+        <p className="mt-2 text-center text-sm text-slate-300">{hasReachedTarget ? 'Repos OK ✅' : 'Décompte en cours'}</p>
+
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          <button className="rounded-md bg-slate-800 px-3 py-2 text-sm" onClick={() => setIsPaused((prev) => !prev)} type="button">
+            {isPaused ? 'Reprendre' : 'Pause'}
+          </button>
+          <button className="rounded-md bg-slate-800 px-3 py-2 text-sm" onClick={() => setElapsedSeconds((prev) => Math.max(0, prev - 30))} type="button">-30s</button>
+          <button className="rounded-md bg-slate-800 px-3 py-2 text-sm" onClick={() => setElapsedSeconds((prev) => prev + 30)} type="button">+30s</button>
+          <button className="rounded-md bg-rose-700 px-3 py-2 text-sm font-medium" onClick={onNext} type="button">Stop repos</button>
+        </div>
+
+        <button className="mt-4 w-full rounded-lg bg-violet-700 px-4 py-3 text-sm font-semibold" onClick={onNext} type="button">
+          Passer à la série suivante
+        </button>
+      </div>
+    </div>
+  );
+};
+
 export default function PlanPage() {
   const router = useRouter();
 
@@ -153,7 +223,8 @@ export default function PlanPage() {
 
   const [focusedExerciseIndex, setFocusedExerciseIndex] = useState(0);
   const [runnerMode, setRunnerMode] = useState<RunnerMode>('input');
-  const [restSecondsDefault, setRestSecondsDefault] = useState(90);
+  const [restModalOpen, setRestModalOpen] = useState(false);
+  const [restModalMeta, setRestModalMeta] = useState<{ exerciseName: string; recommendedSeconds: number }>({ exerciseName: 'Exercice', recommendedSeconds: 90 });
   const [setInputs, setSetInputs] = useState<Record<string, SetInputState>>({});
   const [sessionLogsCount, setSessionLogsCount] = useState<Record<string, number>>({});
 
@@ -410,6 +481,7 @@ export default function PlanPage() {
   }, [allExercisesCompleted, focusedExercise]);
 
   const moveToNextStep = () => {
+    setRestModalOpen(false);
     if (!focusedExercise) {
       setRunnerMode('done');
       return;
@@ -500,6 +572,7 @@ export default function PlanPage() {
     setActiveScheduledWorkoutId(targetSchedule?.id ?? null);
     setSessionLogsCount({});
     setFocusedExerciseIndex(0);
+    setRestModalOpen(false);
     setRunnerMode('input');
   };
 
@@ -532,7 +605,7 @@ export default function PlanPage() {
     }
 
     const setNumber = (sessionLogsCount[key] ?? 0) + 1;
-    const defaultRest = focusedExercise.classType === 'poly' ? 90 : focusedExercise.classType === 'iso' ? 60 : 75;
+    const recommendedRest = focusedExercise.classType === 'poly' ? 120 : focusedExercise.classType === 'iso' ? 75 : 90;
 
     setSavingSet(true);
     setError(null);
@@ -547,7 +620,7 @@ export default function PlanPage() {
       weight_kg: focusedExercise.equipment_type === 'bodyweight' || !input.weightKg ? null : Number(input.weightKg),
       reps: repsValue,
       rpe: input.rpe ? Number(input.rpe) : null,
-      rest_seconds: defaultRest,
+      rest_seconds: recommendedRest,
       set_number: setNumber
     });
 
@@ -574,7 +647,11 @@ export default function PlanPage() {
     }
 
     setSessionLogsCount((prev) => ({ ...prev, [key]: (prev[key] ?? 0) + 1 }));
-    setRestSecondsDefault(defaultRest);
+    setRestModalMeta({
+      exerciseName: focusedExercise.displayName || 'Exercice',
+      recommendedSeconds: recommendedRest
+    });
+    setRestModalOpen(true);
     setRunnerMode('rest');
     setSavingSet(false);
   };
@@ -710,6 +787,7 @@ export default function PlanPage() {
     setSessionId(null);
     setActiveBlueprint(null);
     setRunnerMode('input');
+    setRestModalOpen(false);
     setSessionLogsCount({});
 
     if (createdPlanId) {
@@ -796,18 +874,7 @@ export default function PlanPage() {
             {!sessionId ? (
               <p className="mt-2 text-sm text-slate-300">Démarre la séance pour saisir les séries.</p>
             ) : focusedExercise ? (
-              runnerMode === 'rest' ? (
-                <div className="mt-3 space-y-3">
-                  <p className="text-sm text-slate-200">Repos après la série validée.</p>
-                  <RestTimer defaultSeconds={restSecondsDefault} onStop={moveToNextStep} />
-                  <div className="flex flex-wrap gap-2">
-                    {[60, 90, 120].map((preset) => (
-                      <button className="rounded-md bg-slate-800 px-3 py-1 text-xs" key={preset} onClick={() => setRestSecondsDefault(preset)} type="button">{preset}s</button>
-                    ))}
-                    <button className="rounded-md bg-rose-700 px-3 py-1 text-xs" onClick={moveToNextStep} type="button">Stop repos</button>
-                  </div>
-                </div>
-              ) : runnerMode === 'done' && allExercisesCompleted ? (
+              runnerMode === 'done' && allExercisesCompleted ? (
                 <p className="mt-3 rounded-lg bg-emerald-900/30 p-3 text-sm text-emerald-200">Toutes les séries sont validées. Clique sur “Terminer” pour clore la séance.</p>
               ) : (
                 <div className="mt-3 space-y-3">
@@ -841,7 +908,7 @@ export default function PlanPage() {
                       onChange={(event) => setSetInputs((prev) => ({ ...prev, [focusedExercise.exercise_key]: { ...(prev[focusedExercise.exercise_key] ?? { weightKg: '', reps: '', rpe: '' }), rpe: event.target.value } }))}
                     />
                   </div>
-                  <button className="w-full rounded-lg bg-violet-700 px-4 py-3 text-sm font-semibold disabled:opacity-60" disabled={savingSet || (sessionLogsCount[focusedExercise.exercise_key] ?? 0) >= focusedExercise.sets_target} onClick={handleValidateSet} type="button">
+                  <button className="w-full rounded-lg bg-violet-700 px-4 py-3 text-sm font-semibold disabled:opacity-60" disabled={savingSet || runnerMode !== 'input' || (sessionLogsCount[focusedExercise.exercise_key] ?? 0) >= focusedExercise.sets_target} onClick={handleValidateSet} type="button">
                     {savingSet ? 'Validation...' : `Valider série ${Math.min(currentSetNumber, focusedExercise.sets_target)}`}
                   </button>
                 </div>
@@ -852,6 +919,15 @@ export default function PlanPage() {
           </article>
         </>
       )}
+
+
+      <RestModal
+        open={restModalOpen}
+        title={restModalMeta.exerciseName}
+        recommendedSeconds={restModalMeta.recommendedSeconds}
+        onNext={moveToNextStep}
+        onClose={moveToNextStep}
+      />
 
       {finishCelebration.open ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">

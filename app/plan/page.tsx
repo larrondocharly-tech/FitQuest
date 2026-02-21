@@ -7,7 +7,8 @@ import { supabase } from '@/lib/supabaseClient';
 import { generatePlan, type Archetype, type EquipmentType, type GeneratedPlan, type Goal, type Location, type TrainingLevel, type UserPrefs } from '@/lib/plan/generatePlan';
 import { getLastPerformance, recommendWeight, type ExerciseLogForProgression, type Recommendation, xpToLevel } from '@/lib/progression/recommendWeight';
 import { getCycleWeek, weekStart } from '@/lib/cycle/cycle';
-import { buildNextSessionBlueprint, type SessionBlueprint } from '@/lib/session/nextSession';
+import { generateSessionBlueprint } from '@/lib/coach/generateBlueprint';
+import type { SessionBlueprint, VariantExercise } from '@/lib/coach/types';
 import { ensureWeekSchedule, type ScheduledWorkoutRow } from '@/lib/schedule/scheduler';
 
 type ProfilePrefs = {
@@ -20,6 +21,14 @@ type ProfilePrefs = {
   location: Location;
   days_per_week: number;
   equipment: string[];
+};
+
+
+type UserConstraintsRow = {
+  time_cap_minutes: number | null;
+  injuries: string[] | null;
+  banned_exercises: string[] | null;
+  preferred_exercises: string[] | null;
 };
 
 type WorkoutPlanRow = {
@@ -605,13 +614,33 @@ export default function PlanPage() {
       logsByExercise[exercise.exercise_key] = logs ?? [];
     }
 
-    const blueprint = buildNextSessionBlueprint({
-      day: dayPlan,
+    const { data: constraintsData } = await supabase
+      .from('user_constraints')
+      .select('time_cap_minutes, injuries, banned_exercises, preferred_exercises')
+      .eq('user_id', user.id)
+      .maybeSingle<UserConstraintsRow>();
+
+    const { data: variantsData } = await supabase
+      .from('exercise_variants')
+      .select('base_key, variant_key, name, equipment_type, tags, priority')
+      .returns<VariantExercise[]>();
+
+    const blueprint = generateSessionBlueprint({
+      planDay: dayPlan,
       goal: prefs.goal,
       cycleWeek: getCycleWeek(cycleStartDate ?? new Date(), new Date()),
       logsByExercise,
       archetype: prefs.archetype,
-      baseline: prefs.baseline
+      baseline: prefs.baseline,
+      constraints: {
+        injuries: constraintsData?.injuries ?? [],
+        banned: constraintsData?.banned_exercises ?? [],
+        preferred: constraintsData?.preferred_exercises ?? [],
+        equipment: prefs.equipment,
+        location: prefs.location,
+        timeCapMinutes: constraintsData?.time_cap_minutes
+      },
+      variantsCatalog: variantsData ?? []
     });
 
     const { data, error: insertError } = await supabase

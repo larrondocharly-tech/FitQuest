@@ -7,11 +7,12 @@ import { supabase } from '@/lib/supabaseClient';
 import RestTimer from '@/components/RestTimer';
 import { generatePlan, type EquipmentType, type GeneratedPlan, type Goal, type Location, type TrainingLevel, type UserPrefs } from '@/lib/plan/generatePlan';
 import { getLastPerformance, recommendWeight, type ExerciseLogForProgression, type Recommendation, xpToLevel } from '@/lib/progression/recommendWeight';
-import { getCycleWeek, isDeloadWeek, weekStart } from '@/lib/cycle/cycle';
+import { getCycleWeek, weekStart } from '@/lib/cycle/cycle';
 import { buildNextSessionBlueprint, type SessionBlueprint } from '@/lib/session/nextSession';
 import { ensureWeekSchedule, type ScheduledWorkoutRow } from '@/lib/schedule/scheduler';
 
 type ProfilePrefs = {
+  hero_name: string | null;
   hero_class: string | null;
   training_level: TrainingLevel;
   goal: Goal;
@@ -22,12 +23,13 @@ type ProfilePrefs = {
 
 type WorkoutPlanRow = {
   id: string;
-  title: string;
-  meta: UserPrefs;
   plan: GeneratedPlan;
-  cycle_week: number;
   cycle_start_date: string;
-  cycle_rules: Record<string, unknown>;
+};
+
+type WorkoutSessionRow = {
+  id: string;
+  blueprint: SessionBlueprint | null;
 };
 
 type ExerciseLogRow = {
@@ -37,18 +39,6 @@ type ExerciseLogRow = {
   rpe: number | null;
   created_at: string;
   exercise_key: string | null;
-};
-
-type WorkoutSessionRow = {
-  id: string;
-  blueprint: SessionBlueprint | null;
-};
-
-type SessionSummary = {
-  durationMinutes: number;
-  setsCount: number;
-  totalVolume: number;
-  xpBonus: number;
 };
 
 type WeeklyQuestRow = {
@@ -66,37 +56,26 @@ type UserStatsRow = {
   streak_milestones: number[] | null;
 };
 
+type RunnerMode = 'input' | 'rest' | 'done';
+
+type SetInputState = { weightKg: string; reps: string; rpe: string };
+
 type ExerciseItem = {
   exercise_key: string;
-  exercise_name: string;
   displayName: string;
+  exercise_name: string;
   equipment_type: EquipmentType;
   sets_target: number;
   target_reps_min: number;
   target_reps_max: number;
-  rpe_target: string | null;
   recommended_weight: number | null;
   note: string | null;
   originalIndex: number;
-};
-
-type RunnerMode = 'input' | 'rest';
-
-type SetInputState = {
-  weightKg: string;
-  reps: string;
-  rpe: string;
-};
-
-type FinishCelebrationState = {
-  open: boolean;
-  xpGained: number;
-  oldXp: number;
-  newXp: number;
-  message: string;
+  classType: 'poly' | 'iso' | 'other';
 };
 
 const defaultPrefs: ProfilePrefs = {
+  hero_name: null,
   hero_class: 'Warrior',
   training_level: 'beginner',
   goal: 'muscle',
@@ -118,19 +97,6 @@ const isoKeywords = ['curl', 'lateral raise', 'extension', 'fly', 'raise', 'push
 
 const dbErrorMessage = (message: string) => (message.includes('does not exist') ? 'La base de données n’est pas à jour. Applique le schema SQL puis réessaie.' : message);
 
-const formatDate = (date: Date): string => {
-  const year = date.getFullYear();
-  const month = `${date.getMonth() + 1}`.padStart(2, '0');
-  const day = `${date.getDate()}`.padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
-
-const addDays = (date: Date, days: number): Date => {
-  const next = new Date(date);
-  next.setDate(next.getDate() + days);
-  return next;
-};
-
 const parseRepRangeFromScheme = (scheme: string | null | undefined): { min: number; max: number } => {
   const safe = scheme ?? '';
   const match = safe.match(/(\d+)\s*-\s*(\d+)/);
@@ -151,37 +117,49 @@ const getExerciseClass = (name?: string | null): 'poly' | 'iso' | 'other' => {
   return 'other';
 };
 
+const formatDate = (date: Date): string => {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const addDays = (date: Date, days: number): Date => {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+};
+
 export default function PlanPage() {
   const router = useRouter();
+
   const [prefs, setPrefs] = useState<ProfilePrefs | null>(null);
   const [plan, setPlan] = useState<GeneratedPlan | null>(null);
   const [activePlanId, setActivePlanId] = useState<string | null>(null);
+  const [cycleStartDate, setCycleStartDate] = useState<string | null>(null);
+  const [selectedDayIndex, setSelectedDayIndex] = useState(0);
+  const [activeBlueprint, setActiveBlueprint] = useState<SessionBlueprint | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [warning, setWarning] = useState<string | null>(null);
+  const [scheduledWorkouts, setScheduledWorkouts] = useState<ScheduledWorkoutRow[]>([]);
+  const [activeScheduledWorkoutId, setActiveScheduledWorkoutId] = useState<string | null>(null);
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [startingSession, setStartingSession] = useState(false);
   const [finishingSession, setFinishingSession] = useState(false);
   const [savingSet, setSavingSet] = useState(false);
-  const [recommendations, setRecommendations] = useState<Record<string, Recommendation>>({});
-  const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null);
-  const [activeCycleWeek, setActiveCycleWeek] = useState(1);
-  const [cycleStartDate, setCycleStartDate] = useState<string | null>(null);
-  const [selectedDayIndex, setSelectedDayIndex] = useState(0);
-  const [activeBlueprint, setActiveBlueprint] = useState<SessionBlueprint | null>(null);
-  const [weeklyQuestProgress, setWeeklyQuestProgress] = useState<WeeklyQuestRow | null>(null);
-  const [scheduledWorkouts, setScheduledWorkouts] = useState<ScheduledWorkoutRow[]>([]);
-  const [activeScheduledWorkoutId, setActiveScheduledWorkoutId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
 
   const [focusedExerciseIndex, setFocusedExerciseIndex] = useState(0);
-  const [currentSetNumber, setCurrentSetNumber] = useState(1);
   const [runnerMode, setRunnerMode] = useState<RunnerMode>('input');
   const [restSecondsDefault, setRestSecondsDefault] = useState(90);
   const [setInputs, setSetInputs] = useState<Record<string, SetInputState>>({});
   const [sessionLogsCount, setSessionLogsCount] = useState<Record<string, number>>({});
-  const [finishCelebration, setFinishCelebration] = useState<FinishCelebrationState>({ open: false, xpGained: 0, oldXp: 0, newXp: 0, message: encouragementPool[0] });
-  const [animatedXp, setAnimatedXp] = useState(0);
+
+  const [recommendations, setRecommendations] = useState<Record<string, Recommendation>>({});
+  const [weeklyQuestProgress, setWeeklyQuestProgress] = useState<WeeklyQuestRow | null>(null);
+  const [finishCelebration, setFinishCelebration] = useState<{ open: boolean; xpGained: number; message: string }>({ open: false, xpGained: 0, message: encouragementPool[0] });
 
   const savePlan = async (userId: string, nextPlan: GeneratedPlan): Promise<string | null> => {
     setSaving(true);
@@ -215,7 +193,6 @@ export default function PlanPage() {
       return null;
     }
 
-    setActivePlanId(data.id);
     return data.id;
   };
 
@@ -241,19 +218,18 @@ export default function PlanPage() {
   };
 
   useEffect(() => {
-    const loadPlan = async () => {
+    const load = async () => {
       setLoading(true);
       setError(null);
-
-      const { data: { user }, error: userError } = await supabase.auth.getUser();
-      if (userError || !user) {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
         router.replace('/auth');
         return;
       }
 
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
-        .select('hero_class, training_level, goal, location, days_per_week, equipment')
+        .select('hero_name, hero_class, training_level, goal, location, days_per_week, equipment')
         .eq('id', user.id)
         .maybeSingle();
 
@@ -264,39 +240,34 @@ export default function PlanPage() {
       }
 
       const nextPrefs: ProfilePrefs = {
+        hero_name: profile?.hero_name ?? null,
         hero_class: profile?.hero_class ?? defaultPrefs.hero_class,
         training_level: profile?.training_level ?? defaultPrefs.training_level,
-        goal: profile?.goal ?? (profile?.hero_class === 'Warrior' ? 'muscle' : defaultPrefs.goal),
+        goal: profile?.goal ?? defaultPrefs.goal,
         location: profile?.location ?? defaultPrefs.location,
         days_per_week: profile?.days_per_week ?? defaultPrefs.days_per_week,
         equipment: profile?.equipment ?? []
       };
       setPrefs(nextPrefs);
 
-      const { data: activePlan, error: activePlanError } = await supabase
+      const { data: activePlan, error: planError } = await supabase
         .from('workout_plans')
-        .select('id, title, meta, plan, cycle_week, cycle_start_date, cycle_rules')
+        .select('id, plan, cycle_start_date')
         .eq('user_id', user.id)
         .eq('is_active', true)
         .maybeSingle<WorkoutPlanRow>();
 
-      if (activePlanError) {
+      if (planError) {
         setLoading(false);
-        setError(dbErrorMessage(activePlanError.message));
+        setError(dbErrorMessage(planError.message));
         return;
       }
 
-      let nextPlan: GeneratedPlan;
-      let currentPlanId: string | null = activePlan?.id ?? null;
+      let effectivePlan = activePlan?.plan ?? null;
+      let planId = activePlan?.id ?? null;
 
-      if (activePlan?.plan) {
-        nextPlan = activePlan.plan;
-        setPlan(activePlan.plan);
-        setActivePlanId(activePlan.id);
-        setCycleStartDate(activePlan.cycle_start_date);
-        setActiveCycleWeek(getCycleWeek(activePlan.cycle_start_date, new Date()));
-      } else {
-        const generated = generatePlan({
+      if (!effectivePlan) {
+        effectivePlan = generatePlan({
           hero_class: nextPrefs.hero_class ?? 'Warrior',
           training_level: nextPrefs.training_level,
           goal: nextPrefs.goal,
@@ -304,66 +275,53 @@ export default function PlanPage() {
           days_per_week: nextPrefs.days_per_week,
           equipment: nextPrefs.equipment
         });
-        nextPlan = generated;
-        setPlan(generated);
-        setCycleStartDate(new Date().toISOString().slice(0, 10));
-        setActiveCycleWeek(1);
-        const createdPlanId = await savePlan(user.id, generated);
-        if (createdPlanId) {
-          setActivePlanId(createdPlanId);
-          currentPlanId = createdPlanId;
-        }
+        planId = await savePlan(user.id, effectivePlan);
       }
 
-      const recommendationMap: Record<string, Recommendation> = {};
-      for (const [dayIndex, dayPlan] of nextPlan.days.entries()) {
-        for (const [exerciseIndex, exercise] of dayPlan.exercises.entries()) {
-          const uiKey = `${dayIndex}-${exerciseIndex}`;
-          const { data: keyLogs } = await supabase
-            .from('exercise_logs')
-            .select('session_id, weight_kg, reps, rpe, created_at, exercise_key')
-            .eq('user_id', user.id)
-            .eq('exercise_key', exercise.exercise_key)
-            .order('created_at', { ascending: false })
-            .limit(30)
-            .returns<ExerciseLogRow[]>();
+      setPlan(effectivePlan);
+      setActivePlanId(planId);
+      setCycleStartDate(activePlan?.cycle_start_date ?? new Date().toISOString().slice(0, 10));
 
-          const logs = keyLogs ?? [];
-          const parsed = parseRepRangeFromScheme(exercise.reps);
-          const minReps = exercise.target_reps_min ?? parsed.min;
-          const maxReps = exercise.target_reps_max ?? parsed.max;
-          const lastPerformance = getLastPerformance(logs, minReps, maxReps);
-          recommendationMap[uiKey] = recommendWeight({
-            goal: nextPrefs.goal,
-            targetRepsRange: { min: minReps, max: maxReps },
-            lastWeight: lastPerformance.lastWeight,
-            lastReps: lastPerformance.lastReps,
-            lastRpe: lastPerformance.lastRpe,
-            equipment: exercise.equipment_type,
-            failedBelowTargetMinTwice: lastPerformance.failedBelowTargetMinTwice,
-            targetMaxHitTwiceRecently: lastPerformance.targetMaxHitTwiceRecently
-          });
-        }
-      }
-      setRecommendations(recommendationMap);
-
-      const currentWeekStart = weekStart(new Date()).toISOString().slice(0, 10);
-      const { data: weeklyQuest } = await supabase
-        .from('weekly_quests')
-        .select('completed_sessions, target_sessions, completed')
-        .eq('user_id', user.id)
-        .eq('week_start', currentWeekStart)
-        .maybeSingle<WeeklyQuestRow>();
-      setWeeklyQuestProgress(weeklyQuest ?? { completed_sessions: 0, target_sessions: 3, completed: false });
-
-      if (currentPlanId) {
+      if (effectivePlan && planId) {
         try {
-          const schedule = await ensureWeekSchedule(user.id, nextPlan, currentPlanId);
+          const schedule = await ensureWeekSchedule(user.id, effectivePlan, planId);
           setScheduledWorkouts(schedule);
         } catch (scheduleError) {
-          const message = scheduleError instanceof Error ? scheduleError.message : 'Impossible de créer le planning hebdomadaire.';
-          setError(dbErrorMessage(message));
+          const msg = scheduleError instanceof Error ? scheduleError.message : 'Impossible de créer le planning.';
+          setError(dbErrorMessage(msg));
         }
+      }
+
+      if (effectivePlan) {
+        const recommendationMap: Record<string, Recommendation> = {};
+        for (const [dayIndex, dayPlan] of effectivePlan.days.entries()) {
+          for (const [exerciseIndex, exercise] of dayPlan.exercises.entries()) {
+            const key = `${dayIndex}-${exerciseIndex}`;
+            const { data: logs } = await supabase
+              .from('exercise_logs')
+              .select('session_id, weight_kg, reps, rpe, created_at, exercise_key')
+              .eq('user_id', user.id)
+              .eq('exercise_key', exercise.exercise_key)
+              .order('created_at', { ascending: false })
+              .limit(30)
+              .returns<ExerciseLogRow[]>();
+            const parsed = parseRepRangeFromScheme(exercise.reps);
+            const min = exercise.target_reps_min ?? parsed.min;
+            const max = exercise.target_reps_max ?? parsed.max;
+            const last = getLastPerformance(logs ?? [], min, max);
+            recommendationMap[key] = recommendWeight({
+              goal: nextPrefs.goal,
+              targetRepsRange: { min, max },
+              lastWeight: last.lastWeight,
+              lastReps: last.lastReps,
+              lastRpe: last.lastRpe,
+              equipment: exercise.equipment_type,
+              failedBelowTargetMinTwice: last.failedBelowTargetMinTwice,
+              targetMaxHitTwiceRecently: last.targetMaxHitTwiceRecently
+            });
+          }
+        }
+        setRecommendations(recommendationMap);
       }
 
       const { data: existingSession } = await supabase
@@ -381,145 +339,107 @@ export default function PlanPage() {
         await fetchSessionLogCounts(user.id, existingSession.id);
       }
 
+      const currentWeekStart = weekStart(new Date()).toISOString().slice(0, 10);
+      const { data: weeklyQuest } = await supabase
+        .from('weekly_quests')
+        .select('completed_sessions, target_sessions, completed')
+        .eq('user_id', user.id)
+        .eq('week_start', currentWeekStart)
+        .maybeSingle<WeeklyQuestRow>();
+      setWeeklyQuestProgress(weeklyQuest ?? { completed_sessions: 0, target_sessions: 3, completed: false });
+
       setLoading(false);
     };
 
-    loadPlan();
+    load();
   }, [router]);
 
   const workoutItems = useMemo<ExerciseItem[]>(() => {
     if (!plan) return [];
     const dayExercises = plan.days[selectedDayIndex]?.exercises ?? [];
-    const sourceExercises = activeBlueprint?.exercises ?? dayExercises;
+    const source = activeBlueprint?.exercises ?? dayExercises;
 
-    return sourceExercises.map((exercise, index) => {
+    const normalized = source.map((exercise, index) => {
       const fallback = dayExercises[index];
       const parsed = parseRepRangeFromScheme(exercise.reps ?? fallback?.reps);
       const targetMin = exercise.target_reps_min ?? fallback?.target_reps_min ?? parsed.min;
       const targetMax = exercise.target_reps_max ?? fallback?.target_reps_max ?? parsed.max;
-      const recWeight =
-        typeof (exercise as { recommended_weight?: unknown }).recommended_weight === 'number'
-          ? ((exercise as { recommended_weight?: number }).recommended_weight ?? null)
-          : recommendations[`${selectedDayIndex}-${index}`]?.recommendedWeight ?? null;
-      const progressionNote = (exercise as { progression_note?: string }).progression_note;
-      const note = progressionNote ?? exercise.notes ?? fallback?.notes ?? null;
-      const rpeTarget = note?.match(/rpe\s*([\d-]+)/i)?.[1] ?? null;
-
-      const displayName = (
-        exercise.exercise_name
-        ?? (exercise as { exerciseName?: string | null }).exerciseName
-        ?? (exercise as { name?: string | null }).name
-        ?? (exercise as { exercise_key?: string | null }).exercise_key
-        ?? (exercise as { exerciseKey?: string | null }).exerciseKey
-        ?? 'Exercice'
-      ).toString().trim() || 'Exercice';
+      const setsTarget = parseSetsTarget(exercise.sets ?? fallback?.sets);
+      const candidateDisplayName = (exercise as { displayName?: string }).displayName
+        ?? exercise.exercise_name
+        ?? (fallback as { displayName?: string } | undefined)?.displayName
+        ?? fallback?.exercise_name
+        ?? 'Exercice';
+      const displayName = candidateDisplayName.trim() || 'Exercice';
+      const recWeight = typeof (exercise as { recommended_weight?: unknown }).recommended_weight === 'number'
+        ? (exercise as { recommended_weight?: number }).recommended_weight ?? null
+        : recommendations[`${selectedDayIndex}-${index}`]?.recommendedWeight ?? null;
 
       return {
-        exercise_key: exercise.exercise_key,
-        exercise_name: exercise.exercise_name,
+        exercise_key: exercise.exercise_key ?? fallback?.exercise_key ?? `exercise-${index}`,
         displayName,
-        equipment_type: exercise.equipment_type,
-        sets_target: parseSetsTarget(exercise.sets ?? fallback?.sets),
+        exercise_name: exercise.exercise_name ?? fallback?.exercise_name ?? displayName,
+        equipment_type: (exercise.equipment_type ?? fallback?.equipment_type ?? 'bodyweight') as EquipmentType,
+        sets_target: setsTarget,
         target_reps_min: targetMin,
         target_reps_max: targetMax,
-        rpe_target: rpeTarget,
         recommended_weight: recWeight,
-        note,
-        originalIndex: index
+        note: (exercise as { note?: string; notes?: string }).note ?? (exercise as { note?: string; notes?: string }).notes ?? null,
+        originalIndex: index,
+        classType: getExerciseClass(displayName)
       };
+    });
+
+    const order = (type: ExerciseItem['classType']) => (type === 'poly' ? 0 : type === 'iso' ? 1 : 2);
+    return [...normalized].sort((a, b) => {
+      const rank = order(a.classType) - order(b.classType);
+      return rank === 0 ? a.originalIndex - b.originalIndex : rank;
     });
   }, [activeBlueprint, plan, recommendations, selectedDayIndex]);
 
-  const sortedSummaryItems = useMemo(() => {
-    return [...workoutItems].sort((a, b) => {
-      const rank = { poly: 0, iso: 1, other: 2 } as const;
-      const aRank = rank[getExerciseClass(a.displayName)];
-      const bRank = rank[getExerciseClass(b.displayName)];
-      if (aRank === bRank) return a.originalIndex - b.originalIndex;
-      return aRank - bRank;
-    });
-  }, [workoutItems]);
-
   const focusedExercise = workoutItems[focusedExerciseIndex] ?? null;
+  const allExercisesCompleted = workoutItems.length > 0 && workoutItems.every((item) => (sessionLogsCount[item.exercise_key] ?? 0) >= item.sets_target);
+  const currentSetNumber = focusedExercise ? (sessionLogsCount[focusedExercise.exercise_key] ?? 0) + 1 : 1;
 
   useEffect(() => {
     if (!focusedExercise) {
-      setCurrentSetNumber(1);
+      setRunnerMode('done');
+      return;
+    }
+    if (allExercisesCompleted) setRunnerMode('done');
+  }, [allExercisesCompleted, focusedExercise]);
+
+  const moveToNextStep = () => {
+    if (!focusedExercise) {
+      setRunnerMode('done');
       return;
     }
     const completed = sessionLogsCount[focusedExercise.exercise_key] ?? 0;
-    setCurrentSetNumber(Math.min(completed + 1, focusedExercise.sets_target));
-  }, [focusedExercise, sessionLogsCount]);
-
-  const allExercisesCompleted = useMemo(() => {
-    if (!workoutItems.length) return false;
-    return workoutItems.every((item) => (sessionLogsCount[item.exercise_key] ?? 0) >= item.sets_target);
-  }, [sessionLogsCount, workoutItems]);
-
-  const handleRegenerate = async () => {
-    if (!prefs) return;
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      router.replace('/auth');
-      return;
-    }
-
-    const nextPlan = generatePlan({
-      hero_class: prefs.hero_class ?? 'Warrior',
-      training_level: prefs.training_level,
-      goal: prefs.goal,
-      location: prefs.location,
-      days_per_week: prefs.days_per_week,
-      equipment: prefs.equipment
-    });
-
-    setPlan(nextPlan);
-    setSessionId(null);
-    setSessionSummary(null);
-    setActiveBlueprint(null);
-    setSessionLogsCount({});
-    setCycleStartDate(new Date().toISOString().slice(0, 10));
-    setActiveCycleWeek(1);
-    const createdPlanId = await savePlan(user.id, nextPlan);
-    const schedulePlanId = createdPlanId ?? activePlanId;
-
-    if (schedulePlanId) {
-      try {
-        const schedule = await ensureWeekSchedule(user.id, nextPlan, schedulePlanId);
-        setScheduledWorkouts(schedule);
-      } catch (scheduleError) {
-        const message = scheduleError instanceof Error ? scheduleError.message : 'Impossible de mettre à jour le planning.';
-        setError(dbErrorMessage(message));
+    if (completed >= focusedExercise.sets_target) {
+      const nextIdx = workoutItems.findIndex((item) => (sessionLogsCount[item.exercise_key] ?? 0) < item.sets_target);
+      if (nextIdx >= 0) {
+        setFocusedExerciseIndex(nextIdx);
+        setRunnerMode('input');
+      } else {
+        setRunnerMode('done');
       }
-    }
-  };
-
-  const handleAdvanceWeek = async () => {
-    if (!activePlanId || !cycleStartDate) return;
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-
-    const start = new Date(`${cycleStartDate}T00:00:00`);
-    start.setDate(start.getDate() - 7);
-    const nextStart = start.toISOString().slice(0, 10);
-    const nextWeek = getCycleWeek(nextStart, new Date());
-
-    const { error: updateError } = await supabase.from('workout_plans').update({ cycle_start_date: nextStart, cycle_week: nextWeek }).eq('id', activePlanId).eq('user_id', user.id);
-    if (updateError) {
-      setError(dbErrorMessage(updateError.message));
       return;
     }
 
-    setCycleStartDate(nextStart);
-    setActiveCycleWeek(nextWeek);
+    setSetInputs((prev) => ({
+      ...prev,
+      [focusedExercise.exercise_key]: {
+        ...prev[focusedExercise.exercise_key],
+        reps: '',
+        rpe: '',
+        weightKg: focusedExercise.equipment_type === 'bodyweight' ? '' : prev[focusedExercise.exercise_key]?.weightKg ?? ''
+      }
+    }));
+    setRunnerMode('input');
   };
 
   const handleStartSession = async () => {
-    if (!activePlanId || !prefs || !plan) {
-      setError('Impossible de démarrer la session: plan actif introuvable.');
-      return;
-    }
-
+    if (!plan || !activePlanId || !prefs) return;
     setStartingSession(true);
     setError(null);
 
@@ -529,17 +449,14 @@ export default function PlanPage() {
       return;
     }
 
-    const currentCycleWeek = getCycleWeek(cycleStartDate ?? new Date(), new Date());
-    setActiveCycleWeek(currentCycleWeek);
-
     const today = formatDate(new Date());
     const scheduleForToday = scheduledWorkouts.find((item) => item.workout_date === today && item.status !== 'skipped') ?? null;
     const fallbackPlanned = [...scheduledWorkouts].filter((item) => item.status === 'planned').sort((a, b) => a.workout_date.localeCompare(b.workout_date))[0] ?? null;
     const targetSchedule = scheduleForToday ?? fallbackPlanned;
-    const nextDayIndex = targetSchedule?.day_index ?? selectedDayIndex;
-    setSelectedDayIndex(nextDayIndex);
+    const dayIndex = targetSchedule?.day_index ?? selectedDayIndex;
+    setSelectedDayIndex(dayIndex);
 
-    const dayPlan = plan.days[nextDayIndex];
+    const dayPlan = plan.days[dayIndex];
     if (!dayPlan) {
       setStartingSession(false);
       setError('Jour de plan introuvable.');
@@ -559,23 +476,27 @@ export default function PlanPage() {
       logsByExercise[exercise.exercise_key] = logs ?? [];
     }
 
-    const blueprint = buildNextSessionBlueprint({ day: dayPlan, goal: prefs.goal, cycleWeek: currentCycleWeek, logsByExercise });
+    const blueprint = buildNextSessionBlueprint({
+      day: dayPlan,
+      goal: prefs.goal,
+      cycleWeek: getCycleWeek(cycleStartDate ?? new Date(), new Date()),
+      logsByExercise
+    });
 
-    const { data, error: sessionError } = await supabase
+    const { data, error: insertError } = await supabase
       .from('workout_sessions')
       .insert({ user_id: user.id, plan_id: activePlanId, started_at: new Date().toISOString(), location: prefs.location, blueprint })
       .select('id')
       .single();
 
     setStartingSession(false);
-    if (sessionError) {
-      setError(dbErrorMessage(sessionError.message));
+    if (insertError) {
+      setError(dbErrorMessage(insertError.message));
       return;
     }
 
-    setSessionSummary(null);
-    setActiveBlueprint(blueprint);
     setSessionId(data.id);
+    setActiveBlueprint(blueprint);
     setActiveScheduledWorkoutId(targetSchedule?.id ?? null);
     setSessionLogsCount({});
     setFocusedExerciseIndex(0);
@@ -583,7 +504,7 @@ export default function PlanPage() {
   };
 
   const handleValidateSet = async () => {
-    if (!sessionId || !activePlanId || !focusedExercise || savingSet) return;
+    if (!sessionId || !activePlanId || !focusedExercise || savingSet || runnerMode !== 'input') return;
 
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
@@ -591,8 +512,8 @@ export default function PlanPage() {
       return;
     }
 
-    const inputKey = focusedExercise.exercise_key;
-    const input = setInputs[inputKey] ?? { weightKg: '', reps: '', rpe: '' };
+    const key = focusedExercise.exercise_key;
+    const input = setInputs[key] ?? { weightKg: '', reps: '', rpe: '' };
     const repsValue = Number(input.reps);
     if (!Number.isFinite(repsValue) || repsValue <= 0) {
       setError('Entre un nombre de reps valide avant de valider la série.');
@@ -610,9 +531,8 @@ export default function PlanPage() {
       setWarning(null);
     }
 
-    const setIndex = (sessionLogsCount[focusedExercise.exercise_key] ?? 0) + 1;
-    const exerciseClass = getExerciseClass(focusedExercise.displayName);
-    const restDefault = exerciseClass === 'poly' ? 120 : exerciseClass === 'iso' ? 60 : 90;
+    const setNumber = (sessionLogsCount[key] ?? 0) + 1;
+    const defaultRest = focusedExercise.classType === 'poly' ? 90 : focusedExercise.classType === 'iso' ? 60 : 75;
 
     setSavingSet(true);
     setError(null);
@@ -621,18 +541,14 @@ export default function PlanPage() {
       user_id: user.id,
       session_id: sessionId,
       plan_id: activePlanId,
-      day_index: selectedDayIndex,
-      exercise_index: focusedExercise.originalIndex,
       exercise_key: focusedExercise.exercise_key,
-      exercise_name: focusedExercise.exercise_name,
+      exercise_name: focusedExercise.displayName,
       equipment_type: focusedExercise.equipment_type,
-      set_index: setIndex,
-      target_reps_min: focusedExercise.target_reps_min,
-      target_reps_max: focusedExercise.target_reps_max,
-      weight_kg: input.weightKg ? Number(input.weightKg) : null,
+      weight_kg: focusedExercise.equipment_type === 'bodyweight' || !input.weightKg ? null : Number(input.weightKg),
       reps: repsValue,
       rpe: input.rpe ? Number(input.rpe) : null,
-      rest_seconds: restDefault
+      rest_seconds: defaultRest,
+      set_number: setNumber
     });
 
     if (insertError) {
@@ -641,47 +557,30 @@ export default function PlanPage() {
       return;
     }
 
-    const { data: userStats, error: statFetchError } = await supabase.from('user_stats').select('xp').eq('user_id', user.id).maybeSingle<{ xp: number }>();
-    if (statFetchError) {
+    const { data: stats, error: statsError } = await supabase.from('user_stats').select('xp').eq('user_id', user.id).maybeSingle<{ xp: number }>();
+    if (statsError) {
       setSavingSet(false);
-      setError(dbErrorMessage(statFetchError.message));
+      setError(dbErrorMessage(statsError.message));
       return;
     }
 
-    const nextXp = (userStats?.xp ?? 0) + 10;
+    const nextXp = (stats?.xp ?? 0) + 10;
     const nextLevel = xpToLevel(nextXp);
     const { error: upsertError } = await supabase.from('user_stats').upsert({ user_id: user.id, xp: nextXp, level: nextLevel }, { onConflict: 'user_id' });
-
     if (upsertError) {
       setSavingSet(false);
       setError(dbErrorMessage(upsertError.message));
       return;
     }
 
-    setSessionLogsCount((prev) => ({ ...prev, [focusedExercise.exercise_key]: (prev[focusedExercise.exercise_key] ?? 0) + 1 }));
-    setSetInputs((prev) => ({ ...prev, [inputKey]: { ...input, reps: '', rpe: '' } }));
-    setRestSecondsDefault(restDefault);
+    setSessionLogsCount((prev) => ({ ...prev, [key]: (prev[key] ?? 0) + 1 }));
+    setRestSecondsDefault(defaultRest);
     setRunnerMode('rest');
     setSavingSet(false);
   };
 
-  const handleRestComplete = () => {
-    if (!focusedExercise) {
-      setRunnerMode('input');
-      return;
-    }
-
-    const completed = sessionLogsCount[focusedExercise.exercise_key] ?? 0;
-    if (completed >= focusedExercise.sets_target) {
-      const nextIndex = workoutItems.findIndex((item) => (sessionLogsCount[item.exercise_key] ?? 0) < item.sets_target);
-      if (nextIndex >= 0) setFocusedExerciseIndex(nextIndex);
-    }
-    setRunnerMode('input');
-  };
-
   const handleFinishWorkout = async () => {
-    if (!sessionId) return;
-
+    if (!sessionId || !allExercisesCompleted) return;
     setFinishingSession(true);
     setError(null);
 
@@ -692,7 +591,7 @@ export default function PlanPage() {
     }
 
     const nowIso = new Date().toISOString();
-    const { data: updatedSession, error: endError } = await supabase
+    const { data: sessionRow, error: endError } = await supabase
       .from('workout_sessions')
       .update({ ended_at: nowIso })
       .eq('id', sessionId)
@@ -716,17 +615,11 @@ export default function PlanPage() {
 
     const setsCount = logs?.length ?? 0;
     const totalVolume = (logs ?? []).reduce((sum, set) => sum + (set.weight_kg ? set.weight_kg * set.reps : 0), 0);
-    const durationMinutes = Math.max(1, Math.round((new Date(updatedSession.ended_at ?? nowIso).getTime() - new Date(updatedSession.started_at).getTime()) / (1000 * 60)));
+    const durationMinutes = Math.max(1, Math.round((new Date(sessionRow.ended_at ?? nowIso).getTime() - new Date(sessionRow.started_at).getTime()) / (1000 * 60)));
 
     let xpBonus = setsCount >= 6 ? 50 : 0;
-
     const currentWeekStart = weekStart(new Date()).toISOString().slice(0, 10);
-    const { data: existingQuest } = await supabase
-      .from('weekly_quests')
-      .select('completed_sessions, target_sessions, completed')
-      .eq('user_id', user.id)
-      .eq('week_start', currentWeekStart)
-      .maybeSingle<WeeklyQuestRow>();
+    const { data: existingQuest } = await supabase.from('weekly_quests').select('completed_sessions, target_sessions, completed').eq('user_id', user.id).eq('week_start', currentWeekStart).maybeSingle<WeeklyQuestRow>();
 
     const previousSessions = existingQuest?.completed_sessions ?? 0;
     const targetSessions = existingQuest?.target_sessions ?? 3;
@@ -734,23 +627,22 @@ export default function PlanPage() {
     const questNowCompleted = updatedCompletedSessions >= targetSessions;
     if (questNowCompleted && !(existingQuest?.completed ?? false)) xpBonus += 200;
 
-    const { data: userStats, error: statsFetchError } = await supabase
+    const { data: userStats, error: statsError } = await supabase
       .from('user_stats')
       .select('xp, level, streak_current, streak_best, last_workout_date, streak_milestones')
       .eq('user_id', user.id)
       .maybeSingle<UserStatsRow>();
 
-    if (statsFetchError) {
+    if (statsError) {
       setFinishingSession(false);
-      setError(dbErrorMessage(statsFetchError.message));
+      setError(dbErrorMessage(statsError.message));
       return;
     }
 
     const today = formatDate(new Date());
     const yesterday = formatDate(addDays(new Date(), -1));
     const prevStreak = userStats?.streak_current ?? 0;
-    const previousWorkoutDate = userStats?.last_workout_date;
-    const nextStreak = previousWorkoutDate === yesterday ? prevStreak + 1 : 1;
+    const nextStreak = userStats?.last_workout_date === yesterday ? prevStreak + 1 : 1;
     const nextBest = Math.max(userStats?.streak_best ?? 0, nextStreak);
     const reachedMilestones = new Set<number>((userStats?.streak_milestones ?? []).map(Number));
     if ([3, 7, 14].includes(nextStreak) && !reachedMilestones.has(nextStreak)) {
@@ -759,14 +651,13 @@ export default function PlanPage() {
     }
 
     const oldXp = userStats?.xp ?? 0;
-    const nextXp = oldXp + xpBonus;
-    const nextLevel = xpToLevel(nextXp);
+    const newXp = oldXp + xpBonus;
+    const nextLevel = xpToLevel(newXp);
 
     const { error: statsUpsertError } = await supabase.from('user_stats').upsert(
-      { user_id: user.id, xp: nextXp, level: nextLevel, streak_current: nextStreak, streak_best: nextBest, last_workout_date: today, streak_milestones: Array.from(reachedMilestones.values()) },
+      { user_id: user.id, xp: newXp, level: nextLevel, streak_current: nextStreak, streak_best: nextBest, last_workout_date: today, streak_milestones: Array.from(reachedMilestones.values()) },
       { onConflict: 'user_id' }
     );
-
     if (statsUpsertError) {
       setFinishingSession(false);
       setError(dbErrorMessage(statsUpsertError.message));
@@ -779,211 +670,196 @@ export default function PlanPage() {
     );
 
     if (activeScheduledWorkoutId) {
-      await supabase.from('scheduled_workouts').update({ status: 'done', session_id: sessionId }).eq('id', activeScheduledWorkoutId).eq('user_id', user.id);
+      await supabase.from('scheduled_workouts').update({ status: 'completed', completed_at: nowIso }).eq('id', activeScheduledWorkoutId).eq('user_id', user.id);
     }
 
-    try {
-      const refreshedSchedule = plan && activePlanId ? await ensureWeekSchedule(user.id, plan, activePlanId) : [];
-      setScheduledWorkouts(refreshedSchedule);
-    } catch {
-      // best effort
-    }
+    await supabase.from('workout_sessions').update({ duration_minutes: durationMinutes, total_volume: totalVolume, total_sets: setsCount }).eq('id', sessionId).eq('user_id', user.id);
 
     setWeeklyQuestProgress({ completed_sessions: updatedCompletedSessions, target_sessions: targetSessions, completed: questNowCompleted });
-    setSessionSummary({ durationMinutes, setsCount, totalVolume, xpBonus });
-    setActiveBlueprint(null);
+    setFinishingSession(false);
     setSessionId(null);
-    setActiveScheduledWorkoutId(null);
-    setSessionLogsCount({});
-    setRunnerMode('input');
+    setActiveBlueprint(null);
+    setRunnerMode('done');
     setFinishCelebration({
       open: true,
       xpGained: xpBonus,
-      oldXp,
-      newXp: nextXp,
       message: encouragementPool[Math.floor(Math.random() * encouragementPool.length)]
     });
-    setAnimatedXp(oldXp);
-    setFinishingSession(false);
   };
 
-  useEffect(() => {
-    if (!finishCelebration.open) return;
-    let raf = window.setInterval(() => {
-      setAnimatedXp((prev) => {
-        if (prev >= finishCelebration.newXp) {
-          window.clearInterval(raf);
-          return finishCelebration.newXp;
-        }
-        return Math.min(finishCelebration.newXp, prev + Math.max(1, Math.ceil((finishCelebration.newXp - finishCelebration.oldXp) / 20)));
-      });
-    }, 35);
-    return () => window.clearInterval(raf);
-  }, [finishCelebration]);
+  const handleRegenerate = async () => {
+    if (!prefs) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      router.replace('/auth');
+      return;
+    }
 
-  const planDescription = useMemo(() => (!sessionId ? 'Démarre une session pour lancer le runner.' : `Session en cours (${sessionId.slice(0, 8)}...)`), [sessionId]);
+    const nextPlan = generatePlan({
+      hero_class: prefs.hero_class ?? 'Warrior',
+      training_level: prefs.training_level,
+      goal: prefs.goal,
+      location: prefs.location,
+      days_per_week: prefs.days_per_week,
+      equipment: prefs.equipment
+    });
 
-  if (loading) return <p className="text-slate-300">Chargement du plan...</p>;
+    const createdPlanId = await savePlan(user.id, nextPlan);
+    setPlan(nextPlan);
+    setActivePlanId(createdPlanId);
+    setSessionId(null);
+    setActiveBlueprint(null);
+    setRunnerMode('input');
+    setSessionLogsCount({});
+
+    if (createdPlanId) {
+      try {
+        const schedule = await ensureWeekSchedule(user.id, nextPlan, createdPlanId);
+        setScheduledWorkouts(schedule);
+      } catch (scheduleError) {
+        const msg = scheduleError instanceof Error ? scheduleError.message : 'Impossible de mettre à jour le planning.';
+        setError(dbErrorMessage(msg));
+      }
+    }
+  };
+
+  if (loading) {
+    return <section className="mx-auto max-w-3xl p-4 text-slate-200">Chargement du plan…</section>;
+  }
 
   return (
-    <section className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-3xl font-semibold">Programme recommandé</h2>
-          <p className="text-slate-300">Ton plan hebdomadaire personnalisé selon tes préférences.</p>
-          <p className="text-xs text-slate-400">{planDescription}</p>
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-            <span className="rounded-full border border-violet-400/30 bg-violet-900/30 px-2 py-1 text-violet-100">Cycle S{activeCycleWeek}</span>
-            {isDeloadWeek(activeCycleWeek) ? <span className="rounded-full border border-amber-400/30 bg-amber-900/30 px-2 py-1 text-amber-100">Deload</span> : null}
-            {weeklyQuestProgress ? <span className="rounded-full border border-cyan-400/30 bg-cyan-900/30 px-2 py-1 text-cyan-100">Quête: {weeklyQuestProgress.completed_sessions}/{weeklyQuestProgress.target_sessions}</span> : null}
+    <section className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4 text-slate-100">
+      <header className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h1 className="text-xl font-bold">Plan de séance</h1>
+            <p className="text-sm text-slate-300">Objectif: {plan?.title ?? 'Plan actif'}</p>
           </div>
+          <Link className="rounded-lg border border-slate-700 px-3 py-1 text-xs" href="/">Accueil</Link>
         </div>
-
-        <div className="flex flex-wrap gap-2">
-          <button className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60" disabled={startingSession || !activePlanId || Boolean(sessionId)} onClick={handleStartSession} type="button">
-            {sessionId ? 'Session active' : startingSession ? 'Starting...' : 'Start session'}
+        <div className="mt-3 flex flex-wrap gap-2 text-xs">
+          <span className="rounded-full bg-slate-800 px-2 py-1">Exos: {workoutItems.length}</span>
+          <span className="rounded-full bg-slate-800 px-2 py-1">Quête: {weeklyQuestProgress?.completed_sessions ?? 0}/{weeklyQuestProgress?.target_sessions ?? 3}</span>
+        </div>
+        <div className="mt-4 grid grid-cols-3 gap-2">
+          <button className="rounded-lg bg-violet-700 px-3 py-2 text-sm font-semibold disabled:opacity-60" disabled={!activePlanId || !!sessionId || startingSession} onClick={handleStartSession} type="button">
+            {startingSession ? 'Démarrage...' : 'Démarrer'}
           </button>
-          <button className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60" disabled={saving} onClick={handleRegenerate} type="button">
-            {saving ? 'Génération...' : 'Regenerate plan'}
+          <button className="rounded-lg bg-emerald-700 px-3 py-2 text-sm font-semibold disabled:opacity-60" disabled={!sessionId || !allExercisesCompleted || finishingSession} onClick={handleFinishWorkout} type="button">
+            {finishingSession ? 'Finalisation...' : 'Terminer'}
           </button>
-          {process.env.NODE_ENV !== 'production' ? (
-            <button className="rounded-lg bg-amber-700 px-4 py-2 text-sm font-semibold text-white" onClick={handleAdvanceWeek} type="button">Advance week</button>
-          ) : null}
-          <Link className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold text-white" href="/dashboard">Back dashboard</Link>
+          <button className="rounded-lg bg-slate-700 px-3 py-2 text-sm font-semibold disabled:opacity-60" disabled={saving || startingSession} onClick={handleRegenerate} type="button">
+            {saving ? '...' : 'Regénérer'}
+          </button>
         </div>
-      </div>
+      </header>
 
-      {error ? <p className="rounded-md border border-rose-500/30 bg-rose-900/20 p-3 text-sm text-rose-200">{error}</p> : null}
-      {warning ? <p className="rounded-md border border-amber-500/30 bg-amber-900/20 p-3 text-sm text-amber-200">{warning}</p> : null}
+      {error ? <p className="rounded-lg border border-rose-500/40 bg-rose-950/40 p-3 text-sm text-rose-200">{error}</p> : null}
+      {warning ? <p className="rounded-lg border border-amber-500/40 bg-amber-950/40 p-3 text-sm text-amber-200">{warning}</p> : null}
 
-      {sessionSummary ? (
-        <div className="rounded-xl border border-cyan-500/30 bg-cyan-900/10 p-4 text-sm">
-          <h3 className="text-lg font-semibold text-cyan-200">Résumé de session</h3>
-          <p>Durée: {sessionSummary.durationMinutes} min</p>
-          <p>Séries: {sessionSummary.setsCount}</p>
-          <p>Volume total: {sessionSummary.totalVolume.toFixed(1)} kg</p>
-          <p>Bonus XP: +{sessionSummary.xpBonus}</p>
-        </div>
-      ) : null}
-
-      {plan ? (
+      {!plan ? (
+        <p className="rounded-lg border border-slate-700 bg-slate-900/60 p-4 text-sm">Aucun plan trouvé. Vérifie les tables workout_plans/workout_sessions puis réessaie.</p>
+      ) : (
         <>
-          <div className="rounded-xl border border-violet-500/30 bg-slate-900/80 p-5">
-            <h3 className="text-xl font-semibold text-violet-200">{plan.title}</h3>
-            <p className="mt-2 text-slate-300">Split: {plan.split}</p>
-          </div>
-
-          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-            <label className="text-sm text-slate-300" htmlFor="day-selector">Jour de session</label>
-            <select className="ml-2 rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm" id="day-selector" onChange={(event) => setSelectedDayIndex(Number(event.target.value))} value={selectedDayIndex}>
-              {plan.days.map((dayPlan, dayIndex) => (
-                <option key={dayPlan.day} value={dayIndex}>{dayPlan.day} - {dayPlan.focus}</option>
-              ))}
-            </select>
-          </div>
-
-          {sessionId ? (
-            <div className="space-y-4">
-              <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-                <h4 className="text-lg font-semibold text-violet-200">Résumé de la séance</h4>
-                <p className="mb-3 text-sm text-slate-400">{plan.title}</p>
-                <div className="space-y-2 text-sm">
-                  {sortedSummaryItems.map((item) => {
-                    const completed = (sessionLogsCount[item.exercise_key] ?? 0) >= item.sets_target;
-                    const focused = focusedExercise?.exercise_key === item.exercise_key;
-                    return (
-                      <div className="flex items-center justify-between rounded-md border border-slate-800 bg-slate-950/50 px-3 py-2" key={item.exercise_key}>
-                        <p>{item.displayName} — {item.sets_target} séries • {item.target_reps_min}-{item.target_reps_max} reps</p>
-                        <span>{completed ? '✅' : focused ? '▶️' : '⏳'}</span>
+          <article className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+            <h2 className="text-lg font-semibold">Résumé de la séance</h2>
+            <div className="mt-3 space-y-2">
+              {workoutItems.map((item, index) => {
+                const completed = (sessionLogsCount[item.exercise_key] ?? 0) >= item.sets_target;
+                const focused = index === focusedExerciseIndex;
+                return (
+                  <button
+                    className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left ${focused ? 'border-violet-400 bg-violet-900/20' : 'border-slate-700 bg-slate-950/60'}`}
+                    key={`${item.exercise_key}-${index}`}
+                    onClick={() => {
+                      setFocusedExerciseIndex(index);
+                      setRunnerMode(completed ? 'done' : 'input');
+                    }}
+                    type="button"
+                  >
+                    <div>
+                      <p className="text-sm font-medium">{item.displayName} — {item.sets_target} x {item.target_reps_min}-{item.target_reps_max}</p>
+                      <div className="mt-1 flex gap-2 text-[11px]">
+                        {item.classType === 'poly' ? <span className="rounded-full bg-blue-900/40 px-2 py-0.5 text-blue-200">poly</span> : null}
+                        {item.classType === 'iso' ? <span className="rounded-full bg-pink-900/40 px-2 py-0.5 text-pink-200">iso</span> : null}
                       </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
-                <aside className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-                  <h5 className="font-semibold">Exercices</h5>
-                  <div className="mt-3 space-y-2">
-                    {workoutItems.map((item, idx) => (
-                      <button
-                        className={`w-full rounded-md border px-3 py-2 text-left text-sm ${idx === focusedExerciseIndex ? 'border-violet-400 bg-violet-900/30' : 'border-slate-700 bg-slate-950/50'}`}
-                        key={item.exercise_key}
-                        onClick={() => {
-                          setFocusedExerciseIndex(idx);
-                          setRunnerMode('input');
-                        }}
-                        type="button"
-                      >
-                        <p className="font-medium">{item.displayName}</p>
-                        <p className="text-xs text-slate-400">{sessionLogsCount[item.exercise_key] ?? 0}/{item.sets_target} séries</p>
-                      </button>
-                    ))}
-                  </div>
-                </aside>
-
-                <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-                  {focusedExercise ? (
-                    runnerMode === 'rest' ? (
-                      <RestTimer defaultSeconds={restSecondsDefault} onStop={handleRestComplete} />
-                    ) : (
-                      <>
-                        <h5 className="text-xl font-semibold">{focusedExercise.displayName}</h5>
-                        <p className="mt-1 text-sm text-slate-300">
-                          Poids recommandé: {focusedExercise.recommended_weight === null ? 'N/A' : `${focusedExercise.recommended_weight} kg`} ·
-                          Cible: {focusedExercise.target_reps_min}-{focusedExercise.target_reps_max} reps ·
-                          Série {currentSetNumber}/{focusedExercise.sets_target}
-                        </p>
-                        {focusedExercise.note ? <p className="mt-1 text-xs text-cyan-200">{focusedExercise.note}</p> : null}
-
-                        <div className="mt-4 grid gap-3 md:grid-cols-3">
-                          {focusedExercise.equipment_type !== 'bodyweight' ? (
-                            <input
-                              className="rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
-                              onChange={(event) => setSetInputs((prev) => ({ ...prev, [focusedExercise.exercise_key]: { ...(prev[focusedExercise.exercise_key] ?? { reps: '', rpe: '', weightKg: '' }), weightKg: event.target.value } }))}
-                              placeholder="Poids (kg)"
-                              type="number"
-                              value={setInputs[focusedExercise.exercise_key]?.weightKg ?? ''}
-                            />
-                          ) : <div className="rounded-md border border-slate-800 bg-slate-950/50 px-3 py-2 text-xs text-slate-400">Poids non requis (bodyweight)</div>}
-                          <input className="rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm" onChange={(event) => setSetInputs((prev) => ({ ...prev, [focusedExercise.exercise_key]: { ...(prev[focusedExercise.exercise_key] ?? { reps: '', rpe: '', weightKg: '' }), reps: event.target.value } }))} placeholder="Reps" type="number" value={setInputs[focusedExercise.exercise_key]?.reps ?? ''} />
-                          <input className="rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm" onChange={(event) => setSetInputs((prev) => ({ ...prev, [focusedExercise.exercise_key]: { ...(prev[focusedExercise.exercise_key] ?? { reps: '', rpe: '', weightKg: '' }), rpe: event.target.value } }))} placeholder="RPE (optionnel)" step="0.5" type="number" value={setInputs[focusedExercise.exercise_key]?.rpe ?? ''} />
-                        </div>
-
-                        <button className="mt-4 rounded-lg bg-violet-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60" disabled={savingSet} onClick={handleValidateSet} type="button">
-                          {savingSet ? 'Validation...' : `Valider série ${currentSetNumber}`}
-                        </button>
-                      </>
-                    )
-                  ) : <p className="text-sm text-slate-300">Aucun exercice.</p>}
-                </div>
-              </div>
-
-              {allExercisesCompleted ? (
-                <button className="w-full rounded-xl bg-emerald-600 px-6 py-4 text-lg font-bold text-white disabled:opacity-60" disabled={finishingSession} onClick={handleFinishWorkout} type="button">
-                  {finishingSession ? 'Finalisation...' : 'Séance terminée'}
-                </button>
-              ) : null}
+                    </div>
+                    <span>{completed ? '✅' : focused ? '▶️' : '⏳'}</span>
+                  </button>
+                );
+              })}
             </div>
-          ) : (
-            <p className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-sm text-slate-300">Démarre une session pour lancer le workout runner guidé.</p>
-          )}
+          </article>
+
+          <article className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+            <h2 className="text-lg font-semibold">Exercice en focus</h2>
+            {!sessionId ? (
+              <p className="mt-2 text-sm text-slate-300">Démarre la séance pour saisir les séries.</p>
+            ) : focusedExercise ? (
+              runnerMode === 'rest' ? (
+                <div className="mt-3 space-y-3">
+                  <p className="text-sm text-slate-200">Repos après la série validée.</p>
+                  <RestTimer defaultSeconds={restSecondsDefault} onStop={moveToNextStep} />
+                  <div className="flex flex-wrap gap-2">
+                    {[60, 90, 120].map((preset) => (
+                      <button className="rounded-md bg-slate-800 px-3 py-1 text-xs" key={preset} onClick={() => setRestSecondsDefault(preset)} type="button">{preset}s</button>
+                    ))}
+                    <button className="rounded-md bg-rose-700 px-3 py-1 text-xs" onClick={moveToNextStep} type="button">Stop repos</button>
+                  </div>
+                </div>
+              ) : runnerMode === 'done' && allExercisesCompleted ? (
+                <p className="mt-3 rounded-lg bg-emerald-900/30 p-3 text-sm text-emerald-200">Toutes les séries sont validées. Clique sur “Terminer” pour clore la séance.</p>
+              ) : (
+                <div className="mt-3 space-y-3">
+                  <h3 className="text-xl font-semibold">{focusedExercise.displayName}</h3>
+                  <p className="text-sm text-slate-300">Série: {Math.min(currentSetNumber, focusedExercise.sets_target)}/{focusedExercise.sets_target} · Reps cible: {focusedExercise.target_reps_min}-{focusedExercise.target_reps_max}</p>
+                  {focusedExercise.note ? <p className="text-xs text-cyan-200">{focusedExercise.note}</p> : null}
+                  {focusedExercise.recommended_weight !== null ? <p className="text-xs text-slate-400">Recommandation: {focusedExercise.recommended_weight} kg</p> : null}
+                  <div className="grid gap-2">
+                    {focusedExercise.equipment_type !== 'bodyweight' ? (
+                      <input
+                        className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+                        placeholder="Poids (kg)"
+                        type="number"
+                        value={setInputs[focusedExercise.exercise_key]?.weightKg ?? ''}
+                        onChange={(event) => setSetInputs((prev) => ({ ...prev, [focusedExercise.exercise_key]: { ...(prev[focusedExercise.exercise_key] ?? { weightKg: '', reps: '', rpe: '' }), weightKg: event.target.value } }))}
+                      />
+                    ) : null}
+                    <input
+                      className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+                      placeholder="Reps"
+                      type="number"
+                      value={setInputs[focusedExercise.exercise_key]?.reps ?? ''}
+                      onChange={(event) => setSetInputs((prev) => ({ ...prev, [focusedExercise.exercise_key]: { ...(prev[focusedExercise.exercise_key] ?? { weightKg: '', reps: '', rpe: '' }), reps: event.target.value } }))}
+                    />
+                    <input
+                      className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+                      placeholder="RPE (optionnel)"
+                      type="number"
+                      step="0.5"
+                      value={setInputs[focusedExercise.exercise_key]?.rpe ?? ''}
+                      onChange={(event) => setSetInputs((prev) => ({ ...prev, [focusedExercise.exercise_key]: { ...(prev[focusedExercise.exercise_key] ?? { weightKg: '', reps: '', rpe: '' }), rpe: event.target.value } }))}
+                    />
+                  </div>
+                  <button className="w-full rounded-lg bg-violet-700 px-4 py-3 text-sm font-semibold disabled:opacity-60" disabled={savingSet || (sessionLogsCount[focusedExercise.exercise_key] ?? 0) >= focusedExercise.sets_target} onClick={handleValidateSet} type="button">
+                    {savingSet ? 'Validation...' : `Valider série ${Math.min(currentSetNumber, focusedExercise.sets_target)}`}
+                  </button>
+                </div>
+              )
+            ) : (
+              <p className="mt-2 text-sm text-slate-300">Aucun exercice disponible.</p>
+            )}
+          </article>
         </>
-      ) : null}
+      )}
 
       {finishCelebration.open ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="w-full max-w-md rounded-xl border border-emerald-500/30 bg-slate-900 p-6">
-            <h3 className="text-2xl font-bold text-emerald-300">Bravo 💪</h3>
-            <p className="mt-2 text-slate-200">Tu as gagné +{finishCelebration.xpGained} XP</p>
-            <p className="mt-1 text-sm text-slate-400">{finishCelebration.message}</p>
-            <div className="mt-4">
-              <div className="h-3 w-full rounded-full bg-slate-800">
-                <div className="h-3 rounded-full bg-emerald-500 transition-all duration-300" style={{ width: `${Math.min(100, ((animatedXp % 1000) / 1000) * 100)}%` }} />
-              </div>
-              <p className="mt-2 text-xs text-slate-300">XP: {animatedXp} / {finishCelebration.newXp}</p>
-            </div>
-            <button className="mt-5 w-full rounded-lg bg-emerald-600 px-4 py-2 font-semibold text-white" onClick={() => setFinishCelebration((prev) => ({ ...prev, open: false }))} type="button">Continuer</button>
+          <div className="w-full max-w-sm rounded-xl border border-emerald-500/30 bg-slate-900 p-6">
+            <h3 className="text-2xl font-bold text-emerald-300">GG {prefs?.hero_name ?? 'Héros'} !</h3>
+            <p className="mt-2 text-slate-100">+{finishCelebration.xpGained} XP</p>
+            <p className="mt-1 text-sm text-slate-300">{finishCelebration.message}</p>
+            <button className="mt-5 w-full rounded-lg bg-emerald-600 px-4 py-2 font-semibold text-white" onClick={() => setFinishCelebration((prev) => ({ ...prev, open: false }))} type="button">Super</button>
           </div>
         </div>
       ) : null}

@@ -175,6 +175,7 @@ create table if not exists public.exercise_logs (
   exercise_key text,
   equipment_type text,
   set_index int not null,
+  set_number integer not null default 1,
   target_reps_min int,
   target_reps_max int,
   weight_kg numeric,
@@ -199,6 +200,14 @@ alter table public.user_stats
 
 alter table public.exercise_logs add column if not exists exercise_key text;
 alter table public.exercise_logs add column if not exists equipment_type text;
+alter table public.exercise_logs add column if not exists set_number integer not null default 1;
+
+update public.exercise_logs
+set exercise_name = 'Exercice'
+where exercise_name is null or btrim(exercise_name) = '';
+
+alter table public.exercise_logs
+  alter column exercise_name set not null;
 
 update public.exercise_logs
 set exercise_key = lower(regexp_replace(exercise_name, '[^a-z0-9]+', '_', 'g'))

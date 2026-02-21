@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
+import RestTimer from '@/components/RestTimer';
 import { generatePlan, type EquipmentType, type GeneratedPlan, type Goal, type Location, type TrainingLevel, type UserPrefs } from '@/lib/plan/generatePlan';
 import { getLastPerformance, recommendWeight, type ExerciseLogForProgression, type Recommendation, xpToLevel } from '@/lib/progression/recommendWeight';
 import { getCycleWeek, weekStart } from '@/lib/cycle/cycle';
@@ -75,7 +76,8 @@ type ExerciseItem = {
 
 type RestModalProps = {
   open: boolean;
-  title: string;
+  exerciseName: string;
+  validatedSetLabel: string;
   recommendedSeconds: number;
   onNext: () => void;
   onClose?: () => void;
@@ -102,7 +104,15 @@ const weightedEquipment = new Set<EquipmentType>(['barbell', 'dumbbell', 'machin
 const polyKeywords = ['squat', 'deadlift', 'bench', 'press', 'row', 'pull-up', 'dip', 'lunge', 'hip thrust'];
 const isoKeywords = ['curl', 'lateral raise', 'extension', 'fly', 'raise', 'pushdown', 'leg curl', 'calf'];
 
-const dbErrorMessage = (message: string) => (message.includes('does not exist') ? 'La base de données n’est pas à jour. Applique le schema SQL puis réessaie.' : message);
+const dbErrorMessage = (message: string) => {
+  if (message.includes("Could not find the 'set_number' column") || message.includes('exercise_logs.set_number')) {
+    return 'Ta base Supabase n’est pas à jour. Applique le schema SQL (exercise_logs.set_number) puis recharge.';
+  }
+  if (message.includes('does not exist')) {
+    return 'La base de données n’est pas à jour. Applique le schema SQL puis réessaie.';
+  }
+  return message;
+};
 
 const parseRepRangeFromScheme = (scheme: string | null | undefined): { min: number; max: number } => {
   const safe = scheme ?? '';
@@ -137,62 +147,27 @@ const addDays = (date: Date, days: number): Date => {
   return next;
 };
 
-const formatSeconds = (seconds: number): string => {
-  const total = Math.max(0, Math.floor(seconds));
-  const minutes = Math.floor(total / 60);
-  const remaining = total % 60;
-  return `${String(minutes).padStart(2, '0')}:${String(remaining).padStart(2, '0')}`;
-};
-
-const RestModal = ({ open, title, recommendedSeconds, onNext, onClose }: RestModalProps) => {
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [isPaused, setIsPaused] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    setElapsedSeconds(0);
-    setIsPaused(false);
-  }, [open, recommendedSeconds]);
-
-  useEffect(() => {
-    if (!open || isPaused) return;
-    const interval = window.setInterval(() => {
-      setElapsedSeconds((prev) => prev + 1);
-    }, 1000);
-
-    return () => window.clearInterval(interval);
-  }, [open, isPaused]);
-
+const RestModal = ({ open, exerciseName, validatedSetLabel, recommendedSeconds, onNext, onClose }: RestModalProps) => {
   if (!open) return null;
-
-  const remainingSeconds = recommendedSeconds - elapsedSeconds;
-  const hasReachedTarget = remainingSeconds <= 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-3 sm:items-center sm:p-4">
       <div className="w-full max-w-md rounded-xl border border-slate-700 bg-slate-900 p-4 shadow-xl sm:p-5">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <p className="text-xs uppercase tracking-wide text-slate-400">Temps de repos</p>
-            <h3 className="text-lg font-semibold text-slate-100">{title}</h3>
+            <p className="text-xs uppercase tracking-wide text-slate-400">Repos</p>
+            <h3 className="text-lg font-semibold text-slate-100">{exerciseName}</h3>
+            <p className="mt-1 text-sm text-emerald-300">{validatedSetLabel} ✅</p>
           </div>
           {onClose ? <button aria-label="Fermer" className="rounded-md px-2 py-1 text-slate-300" onClick={onClose} type="button">✕</button> : null}
         </div>
 
-        <p className="mt-2 text-sm text-slate-300">Repos conseillé: {formatSeconds(recommendedSeconds)}</p>
-        <p className="mt-4 text-center font-mono text-4xl font-bold text-violet-300">{formatSeconds(Math.abs(remainingSeconds))}</p>
-        <p className="mt-2 text-center text-sm text-slate-300">{hasReachedTarget ? 'Repos OK ✅' : 'Décompte en cours'}</p>
-
-        <div className="mt-4 grid grid-cols-2 gap-2">
-          <button className="rounded-md bg-slate-800 px-3 py-2 text-sm" onClick={() => setIsPaused((prev) => !prev)} type="button">
-            {isPaused ? 'Reprendre' : 'Pause'}
-          </button>
-          <button className="rounded-md bg-slate-800 px-3 py-2 text-sm" onClick={() => setElapsedSeconds((prev) => Math.max(0, prev - 30))} type="button">-30s</button>
-          <button className="rounded-md bg-slate-800 px-3 py-2 text-sm" onClick={() => setElapsedSeconds((prev) => prev + 30)} type="button">+30s</button>
-          <button className="rounded-md bg-rose-700 px-3 py-2 text-sm font-medium" onClick={onNext} type="button">Stop repos</button>
+        <p className="mt-2 text-sm text-slate-300">Repos conseillé: {recommendedSeconds}s</p>
+        <div className="mt-4">
+          <RestTimer defaultSeconds={recommendedSeconds} onStop={onNext} />
         </div>
 
-        <button className="mt-4 w-full rounded-lg bg-violet-700 px-4 py-3 text-sm font-semibold" onClick={onNext} type="button">
+        <button className="mt-4 w-full rounded-lg bg-violet-700 px-4 py-3 text-base font-semibold" onClick={onNext} type="button">
           Passer à la série suivante
         </button>
       </div>
@@ -224,7 +199,7 @@ export default function PlanPage() {
   const [focusedExerciseIndex, setFocusedExerciseIndex] = useState(0);
   const [runnerMode, setRunnerMode] = useState<RunnerMode>('input');
   const [restModalOpen, setRestModalOpen] = useState(false);
-  const [restModalMeta, setRestModalMeta] = useState<{ exerciseName: string; recommendedSeconds: number }>({ exerciseName: 'Exercice', recommendedSeconds: 90 });
+  const [restModalMeta, setRestModalMeta] = useState<{ exerciseName: string; recommendedSeconds: number; setNumber: number; setsTarget: number }>({ exerciseName: 'Exercice', recommendedSeconds: 90, setNumber: 1, setsTarget: 1 });
   const [setInputs, setSetInputs] = useState<Record<string, SetInputState>>({});
   const [sessionLogsCount, setSessionLogsCount] = useState<Record<string, number>>({});
 
@@ -605,7 +580,8 @@ export default function PlanPage() {
     }
 
     const setNumber = (sessionLogsCount[key] ?? 0) + 1;
-    const recommendedRest = focusedExercise.classType === 'poly' ? 120 : focusedExercise.classType === 'iso' ? 75 : 90;
+    const recommendedRest = focusedExercise.classType === 'poly' ? 120 : focusedExercise.classType === 'iso' ? 90 : 90;
+    const safeExerciseName = focusedExercise.displayName?.trim() || focusedExercise.exercise_name?.trim() || focusedExercise.exercise_key?.trim() || 'Exercice';
 
     setSavingSet(true);
     setError(null);
@@ -615,7 +591,7 @@ export default function PlanPage() {
       session_id: sessionId,
       plan_id: activePlanId,
       exercise_key: focusedExercise.exercise_key,
-      exercise_name: focusedExercise.displayName,
+      exercise_name: safeExerciseName,
       equipment_type: focusedExercise.equipment_type,
       weight_kg: focusedExercise.equipment_type === 'bodyweight' || !input.weightKg ? null : Number(input.weightKg),
       reps: repsValue,
@@ -648,8 +624,10 @@ export default function PlanPage() {
 
     setSessionLogsCount((prev) => ({ ...prev, [key]: (prev[key] ?? 0) + 1 }));
     setRestModalMeta({
-      exerciseName: focusedExercise.displayName || 'Exercice',
-      recommendedSeconds: recommendedRest
+      exerciseName: safeExerciseName,
+      recommendedSeconds: recommendedRest,
+      setNumber,
+      setsTarget: focusedExercise.sets_target
     });
     setRestModalOpen(true);
     setRunnerMode('rest');
@@ -923,7 +901,8 @@ export default function PlanPage() {
 
       <RestModal
         open={restModalOpen}
-        title={restModalMeta.exerciseName}
+        exerciseName={restModalMeta.exerciseName}
+        validatedSetLabel={`Série ${restModalMeta.setNumber}/${restModalMeta.setsTarget} validée`}
         recommendedSeconds={restModalMeta.recommendedSeconds}
         onNext={moveToNextStep}
         onClose={moveToNextStep}

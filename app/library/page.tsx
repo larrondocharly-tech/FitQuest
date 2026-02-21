@@ -98,7 +98,7 @@ export default function LibraryPage() {
 
   return (
     <section className="space-y-4">
-      <h1 className="text-3xl font-semibold">Library</h1>
+      <h1 className="text-3xl font-semibold">Bibliothèque</h1>
       <p className="text-slate-300">Choisis un template adapté à ton archétype.</p>
       {error ? <p className="rounded-md border border-red-500/30 bg-red-900/20 p-2 text-sm text-red-200">{error}</p> : null}
 
@@ -107,9 +107,9 @@ export default function LibraryPage() {
           <article key={item.id} className="rounded-xl border border-slate-700 bg-slate-900/70 p-4">
             <h2 className="text-lg font-semibold text-violet-200">{item.title}</h2>
             <p className="text-sm text-slate-400">{item.archetype} · {item.days_per_week}j/sem · {item.location}</p>
-            <p className="mt-2 text-sm text-slate-300">{item.description ?? 'Template coach system.'}</p>
+            <p className="mt-2 text-sm text-slate-300">{item.description ?? 'Template du coach.'}</p>
             <button className="mt-3 text-sm text-cyan-300" onClick={() => setExpandedId((prev) => prev === item.id ? null : item.id)} type="button">
-              {expandedId === item.id ? 'Masquer preview' : 'Preview'}
+              {expandedId === item.id ? 'Masquer l’aperçu' : 'Aperçu'}
             </button>
 
             {expandedId === item.id ? (

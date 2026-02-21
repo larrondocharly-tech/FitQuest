@@ -1,6 +1,6 @@
 import { applyDeload, isDeloadWeek } from '@/lib/cycle/cycle';
 import { detectPlateau } from '@/lib/coach/plateau';
-import { baselineToZones, recommendPaceForWorkout } from '@/lib/coach/running';
+import { baselineToZones, formatPaceRange, recommendPaceForWorkout } from '@/lib/coach/running';
 import { pickSubstitute } from '@/lib/coach/substitute';
 import type { BlueprintInput, SessionBlueprint, SessionBlueprintExercise } from '@/lib/coach/types';
 import { getLastPerformance, recommendWeight, type Recommendation } from '@/lib/progression/recommendWeight';
@@ -49,7 +49,8 @@ export const generateSessionBlueprint = ({
         recommended_weight: null,
         recommended_reps: `${exercise.target_reps_min}-${exercise.target_reps_max}`,
         recommended_pace_sec_per_km: pace,
-        progression_note: pace ? `Allure cible ${pace}s/km` : 'Courir en aisance respiratoire.'
+        target_pace_min_per_km: formatPaceRange(pace),
+        progression_note: pace ? `Allure cible ${formatPaceRange(pace)}` : 'Courir en aisance respiratoire.'
       };
     }
 

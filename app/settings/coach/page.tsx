@@ -130,9 +130,9 @@ export default function CoachSettingsPage() {
   return (
     <section className="mx-auto max-w-2xl space-y-4">
       <div className="flex items-center justify-between gap-2">
-        <h2 className="text-2xl font-semibold">Coach settings</h2>
+        <h2 className="text-2xl font-semibold">Réglages du coach</h2>
         <Link className="rounded-md border border-slate-700 px-3 py-2 text-xs text-slate-200 hover:bg-slate-900" href="/dashboard">
-          Dashboard
+          Retour au tableau de bord
         </Link>
       </div>
 
@@ -142,7 +142,7 @@ export default function CoachSettingsPage() {
       <div className="space-y-4 rounded-xl border border-violet-500/30 bg-slate-900/80 p-4">
         <div>
           <label className="mb-1 block text-sm text-slate-300" htmlFor="timeCapMinutes">
-            time_cap_minutes
+            Durée max (minutes)
           </label>
           <input
             className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm outline-none ring-violet-500 focus:ring"
@@ -156,7 +156,7 @@ export default function CoachSettingsPage() {
         </div>
 
         <fieldset>
-          <legend className="mb-2 text-sm text-slate-300">injuries</legend>
+          <legend className="mb-2 text-sm text-slate-300">Blessures</legend>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {injuryOptions.map((injury) => (
               <label className="flex items-center gap-2 rounded-md border border-slate-700 px-3 py-2 text-sm" key={injury}>
@@ -173,26 +173,26 @@ export default function CoachSettingsPage() {
 
         <div>
           <label className="mb-1 block text-sm text-slate-300" htmlFor="bannedExercises">
-            banned_exercises
+            Exercices à éviter
           </label>
           <textarea
             className="min-h-28 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm outline-none ring-violet-500 focus:ring"
             id="bannedExercises"
             onChange={(event) => setBannedExercises(event.target.value)}
-            placeholder={'one exercise_key per line\nex: barbell_back_squat'}
+            placeholder={'une exercise_key par ligne\nex: barbell_back_squat'}
             value={bannedExercises}
           />
         </div>
 
         <div>
           <label className="mb-1 block text-sm text-slate-300" htmlFor="preferredExercises">
-            preferred_exercises
+            Exercices préférés
           </label>
           <textarea
             className="min-h-28 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm outline-none ring-violet-500 focus:ring"
             id="preferredExercises"
             onChange={(event) => setPreferredExercises(event.target.value)}
-            placeholder={'one exercise_key per line\nex: chest_supported_row'}
+            placeholder={'une exercise_key par ligne\nex: chest_supported_row'}
             value={preferredExercises}
           />
         </div>
@@ -203,7 +203,7 @@ export default function CoachSettingsPage() {
           onClick={handleSave}
           type="button"
         >
-          {saving ? 'Saving...' : 'Save'}
+          {saving ? 'Enregistrement...' : 'Enregistrer'}
         </button>
       </div>
     </section>

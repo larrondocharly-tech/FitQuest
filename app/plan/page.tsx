@@ -68,18 +68,25 @@ type UserStatsRow = {
 
 type RunnerMode = 'input' | 'rest' | 'done';
 
-type SetInputState = { weightKg: string; reps: string; rpe: string };
+type SetInputState = { weightKg: string; reps: string; rpe: string; duration: string; distanceKm: string };
 
 type ExerciseItem = {
   exercise_key: string;
   displayName: string;
   exercise_name: string;
+  kind: 'strength' | 'run';
   equipment_type: EquipmentType;
   sets_target: number;
   target_reps_min: number;
   target_reps_max: number;
   recommended_weight: number | null;
   recommended_pace_sec_per_km?: number | null;
+  target_duration_min?: number | null;
+  target_distance_km?: number | null;
+  target_intervals?: number | null;
+  work_seconds?: number | null;
+  rest_seconds?: number | null;
+  target_pace_min_per_km?: string | null;
   note: string | null;
   originalIndex: number;
   classType: 'poly' | 'iso' | 'other';
@@ -167,6 +174,27 @@ const formatClock = (totalSeconds: number) => {
   return `${mm}:${ss}`;
 };
 
+
+const parseDurationToSeconds = (value: string): number | null => {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.includes(':')) {
+    const [m, s] = trimmed.split(':').map(Number);
+    if (!Number.isFinite(m) || !Number.isFinite(s)) return null;
+    return Math.max(0, m * 60 + s);
+  }
+  const minutes = Number(trimmed);
+  if (!Number.isFinite(minutes)) return null;
+  return Math.round(minutes * 60);
+};
+
+const formatPace = (secPerKm: number | null): string | null => {
+  if (!secPerKm || !Number.isFinite(secPerKm) || secPerKm <= 0) return null;
+  const mm = Math.floor(secPerKm / 60);
+  const ss = Math.round(secPerKm % 60);
+  return `${mm}:${String(ss).padStart(2, '0')} /km`;
+};
+
 const RestModal = ({ open, exerciseName, validatedSetLabel, recommendedSeconds, onNext, onClose }: RestModalProps) => {
   const [running, setRunning] = useState(true);
   const [elapsed, setElapsed] = useState(0);
@@ -197,7 +225,7 @@ const RestModal = ({ open, exerciseName, validatedSetLabel, recommendedSeconds, 
       <div className="w-full max-w-md rounded-xl border border-slate-700 bg-slate-900 p-4 shadow-xl sm:p-5">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <p className="text-xs uppercase tracking-wide text-slate-400">Repos</p>
+            <p className="text-xs uppercase tracking-wide text-slate-400">Récupération</p>
             <h3 className="text-lg font-semibold text-slate-100">{exerciseName}</h3>
             <p className="mt-1 text-sm text-emerald-300">{validatedSetLabel} ✅</p>
           </div>
@@ -237,7 +265,7 @@ const RestModal = ({ open, exerciseName, validatedSetLabel, recommendedSeconds, 
               onClick={() => setElapsed(0)}
               type="button"
             >
-              Reset
+              Réinitialiser
             </button>
           </div>
         </div>
@@ -247,7 +275,7 @@ const RestModal = ({ open, exerciseName, validatedSetLabel, recommendedSeconds, 
           onClick={onNext}
           type="button"
         >
-          Passer à la série suivante
+          Passer à la suite
         </button>
 
         <p className="mt-2 text-center text-xs text-slate-400">
@@ -511,19 +539,29 @@ export default function PlanPage() {
         ? (exercise as { recommended_pace_sec_per_km?: number }).recommended_pace_sec_per_km ?? null
         : null;
 
+      const kind = ((exercise as { kind?: 'strength' | 'run' }).kind
+        ?? (fallback as { kind?: 'strength' | 'run' } | undefined)?.kind
+        ?? ((exercise.equipment_type ?? fallback?.equipment_type) === 'running' ? 'run' : 'strength'));
       return {
         exercise_key: exercise.exercise_key ?? fallback?.exercise_key ?? `exercise-${index}`,
         displayName,
         exercise_name: exercise.exercise_name ?? fallback?.exercise_name ?? displayName,
+        kind,
         equipment_type: (exercise.equipment_type ?? fallback?.equipment_type ?? 'bodyweight') as EquipmentType,
         sets_target: setsTarget,
         target_reps_min: targetMin,
         target_reps_max: targetMax,
         recommended_weight: recWeight,
         recommended_pace_sec_per_km: recommendedPace,
+        target_duration_min: (exercise as { target_duration_min?: number | null }).target_duration_min ?? null,
+        target_distance_km: (exercise as { target_distance_km?: number | null }).target_distance_km ?? null,
+        target_intervals: (exercise as { target_intervals?: number | null }).target_intervals ?? null,
+        work_seconds: (exercise as { work_seconds?: number | null }).work_seconds ?? null,
+        rest_seconds: (exercise as { rest_seconds?: number | null }).rest_seconds ?? null,
+        target_pace_min_per_km: (exercise as { target_pace_min_per_km?: string | null }).target_pace_min_per_km ?? null,
         note: (exercise as { note?: string; notes?: string }).note ?? (exercise as { note?: string; notes?: string }).notes ?? null,
         originalIndex: index,
-        classType: getExerciseClass(displayName)
+        classType: kind === 'run' ? 'other' : getExerciseClass(displayName)
       };
     });
 
@@ -570,6 +608,8 @@ export default function PlanPage() {
         ...prev[focusedExercise.exercise_key],
         reps: '',
         rpe: '',
+        duration: '',
+        distanceKm: '',
         weightKg: focusedExercise.equipment_type === 'bodyweight' ? '' : prev[focusedExercise.exercise_key]?.weightKg ?? ''
       }
     }));
@@ -674,19 +714,33 @@ export default function PlanPage() {
     }
 
     const key = focusedExercise.exercise_key;
-    const input = setInputs[key] ?? { weightKg: '', reps: '', rpe: '' };
-    const repsValue = Number(input.reps);
-    if (!Number.isFinite(repsValue) || repsValue <= 0) {
+    const input = setInputs[key] ?? { weightKg: '', reps: '', rpe: '', duration: '', distanceKm: '' };
+    const durationSeconds = parseDurationToSeconds(input.duration);
+    const distanceKm = input.distanceKm ? Number(input.distanceKm) : null;
+    const isRun = focusedExercise.kind === 'run';
+    const repsValue = isRun ? (focusedExercise.target_intervals ?? 1) : Number(input.reps);
+
+    if (!isRun && (!Number.isFinite(repsValue) || repsValue <= 0)) {
       setError('Entre un nombre de reps valide avant de valider la série.');
       return;
     }
 
-    if (weightedEquipment.has(focusedExercise.equipment_type) && !input.weightKg) {
+    if (isRun && !durationSeconds) {
+      setError('Entre une durée valide (mm:ss ou minutes).');
+      return;
+    }
+
+    if (isRun && distanceKm !== null && (!Number.isFinite(distanceKm) || distanceKm <= 0)) {
+      setError('La distance doit être un nombre positif.');
+      return;
+    }
+
+    if (!isRun && weightedEquipment.has(focusedExercise.equipment_type) && !input.weightKg) {
       setError('Le poids est obligatoire pour cet exercice.');
       return;
     }
 
-    if (repsValue < focusedExercise.target_reps_min || repsValue > focusedExercise.target_reps_max) {
+    if (!isRun && repsValue < focusedExercise.target_reps_min || (!isRun && repsValue > focusedExercise.target_reps_max)) {
       setWarning(`⚠️ ${focusedExercise.displayName}: ${repsValue} reps hors plage cible (${focusedExercise.target_reps_min}-${focusedExercise.target_reps_max}).`);
     } else {
       setWarning(null);
@@ -710,10 +764,15 @@ export default function PlanPage() {
       exercise_key: focusedExercise.exercise_key,
       exercise_name: safeExerciseName,
       equipment_type: focusedExercise.equipment_type,
-      weight_kg: focusedExercise.equipment_type === 'bodyweight' || !input.weightKg ? null : Number(input.weightKg),
-      reps: repsValue,
+      kind: isRun ? 'run' : 'strength',
+      weight_kg: isRun || focusedExercise.equipment_type === 'bodyweight' || !input.weightKg ? null : Number(input.weightKg),
+      reps: isRun ? Math.max(1, repsValue) : repsValue,
+      duration_seconds: isRun ? durationSeconds : null,
+      distance_km: isRun ? distanceKm : null,
+      pace_sec_per_km: isRun && durationSeconds && distanceKm ? Math.round(durationSeconds / distanceKm) : null,
+      speed_kmh: isRun && durationSeconds && distanceKm ? Number((distanceKm / (durationSeconds / 3600)).toFixed(2)) : null,
       rpe: input.rpe ? Number(input.rpe) : null,
-      rest_seconds: recommendedRest,
+      rest_seconds: isRun ? (focusedExercise.rest_seconds ?? recommendedRest) : recommendedRest,
       set_number: setNumber,
       set_index: setNumber,
     });
@@ -743,12 +802,17 @@ export default function PlanPage() {
     setSessionLogsCount((prev) => ({ ...prev, [key]: (prev[key] ?? 0) + 1 }));
     setRestModalMeta({
       exerciseName: safeExerciseName,
-      recommendedSeconds: recommendedRest,
+      recommendedSeconds: focusedExercise.rest_seconds ?? recommendedRest,
       setNumber,
       setsTarget: focusedExercise.sets_target
     });
-    setRestModalOpen(true);
-    setRunnerMode('rest');
+    if (focusedExercise.kind === 'run' && !focusedExercise.target_intervals) {
+      moveToNextStep();
+      setRunnerMode('done');
+    } else {
+      setRestModalOpen(true);
+      setRunnerMode('rest');
+    }
     setSavingSet(false);
   };
 
@@ -919,13 +983,13 @@ export default function PlanPage() {
         </div>
         <div className="mt-4 grid grid-cols-3 gap-2">
           <button className="rounded-lg bg-violet-700 px-3 py-2 text-sm font-semibold disabled:opacity-60" disabled={!activePlanId || !!sessionId || startingSession} onClick={handleStartSession} type="button">
-            {startingSession ? 'Démarrage...' : 'Démarrer'}
+            {startingSession ? 'Démarrage...' : 'Démarrer la séance'}
           </button>
           <button className="rounded-lg bg-emerald-700 px-3 py-2 text-sm font-semibold disabled:opacity-60" disabled={!sessionId || !allExercisesCompleted || finishingSession} onClick={handleFinishWorkout} type="button">
-            {finishingSession ? 'Finalisation...' : 'Terminer'}
+            {finishingSession ? 'Finalisation...' : 'Terminer la séance'}
           </button>
           <button className="rounded-lg bg-slate-700 px-3 py-2 text-sm font-semibold disabled:opacity-60" disabled={saving || startingSession} onClick={handleRegenerate} type="button">
-            {saving ? '...' : 'Regénérer'}
+            {saving ? '...' : 'Régénérer le plan'}
           </button>
         </div>
       </header>
@@ -954,7 +1018,7 @@ export default function PlanPage() {
                     type="button"
                   >
                     <div>
-                      <p className="text-sm font-medium">{item.displayName} — {item.sets_target} x {item.target_reps_min}-{item.target_reps_max}</p>
+                      <p className="text-sm font-medium">{item.displayName} — {item.kind === 'run' ? `${item.target_duration_min ?? 0} min` : `${item.sets_target} x ${item.target_reps_min}-${item.target_reps_max}`}</p>
                       <div className="mt-1 flex gap-2 text-[11px]">
                         {item.classType === 'poly' ? <span className="rounded-full bg-blue-900/40 px-2 py-0.5 text-blue-200">poly</span> : null}
                         {item.classType === 'iso' ? <span className="rounded-full bg-pink-900/40 px-2 py-0.5 text-pink-200">iso</span> : null}
@@ -977,38 +1041,36 @@ export default function PlanPage() {
               ) : (
                 <div className="mt-3 space-y-3">
                   <h3 className="text-xl font-semibold">{focusedExercise.displayName}</h3>
-                  <p className="text-sm text-slate-300">Série: {Math.min(currentSetNumber, focusedExercise.sets_target)}/{focusedExercise.sets_target} · Reps cible: {focusedExercise.target_reps_min}-{focusedExercise.target_reps_max}</p>
-                  {focusedExercise.note ? <p className="text-xs text-cyan-200">{focusedExercise.note}</p> : null}
-                  {focusedExercise.recommended_pace_sec_per_km ? <p className="text-xs text-slate-400">Allure recommandée: {focusedExercise.recommended_pace_sec_per_km} sec/km</p> : null}
-                  {focusedExercise.recommended_weight !== null ? <p className="text-xs text-slate-400">Recommandation: {focusedExercise.recommended_weight} kg</p> : null}
-                  <div className="grid gap-2">
-                    {focusedExercise.equipment_type !== 'bodyweight' && focusedExercise.equipment_type !== 'running' ? (
-                      <input
-                        className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-                        placeholder="Poids (kg)"
-                        type="number"
-                        value={setInputs[focusedExercise.exercise_key]?.weightKg ?? ''}
-                        onChange={(event) => setSetInputs((prev) => ({ ...prev, [focusedExercise.exercise_key]: { ...(prev[focusedExercise.exercise_key] ?? { weightKg: '', reps: '', rpe: '' }), weightKg: event.target.value } }))}
-                      />
-                    ) : null}
-                    <input
-                      className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-                      placeholder="Reps"
-                      type="number"
-                      value={setInputs[focusedExercise.exercise_key]?.reps ?? ''}
-                      onChange={(event) => setSetInputs((prev) => ({ ...prev, [focusedExercise.exercise_key]: { ...(prev[focusedExercise.exercise_key] ?? { weightKg: '', reps: '', rpe: '' }), reps: event.target.value } }))}
-                    />
-                    <input
-                      className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-                      placeholder="RPE (optionnel)"
-                      type="number"
-                      step="0.5"
-                      value={setInputs[focusedExercise.exercise_key]?.rpe ?? ''}
-                      onChange={(event) => setSetInputs((prev) => ({ ...prev, [focusedExercise.exercise_key]: { ...(prev[focusedExercise.exercise_key] ?? { weightKg: '', reps: '', rpe: '' }), rpe: event.target.value } }))}
-                    />
-                  </div>
+                  {focusedExercise.kind === 'run' ? (
+                    <>
+                      <p className="text-sm text-slate-300">
+                        {focusedExercise.target_intervals
+                          ? `Intervalles: ${focusedExercise.target_intervals} x (${formatClock(focusedExercise.work_seconds ?? 60)} rapide / ${formatClock(focusedExercise.rest_seconds ?? 60)} récup)`
+                          : `Durée cible: ${focusedExercise.target_duration_min ?? 0} min`}
+                      </p>
+                      {focusedExercise.target_pace_min_per_km ? <p className="text-xs text-slate-300">Allure cible: {focusedExercise.target_pace_min_per_km}</p> : null}
+                      {focusedExercise.note ? <p className="text-xs text-cyan-200">{focusedExercise.note}</p> : null}
+                      <div className="grid gap-2">
+                        <input className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm" placeholder="Durée (mm:ss ou minutes)" type="text" value={setInputs[focusedExercise.exercise_key]?.duration ?? ''} onChange={(event) => setSetInputs((prev) => ({ ...prev, [focusedExercise.exercise_key]: { ...(prev[focusedExercise.exercise_key] ?? { weightKg: '', reps: '', rpe: '', duration: '', distanceKm: '' }), duration: event.target.value } }))} />
+                        <input className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm" placeholder="Distance (km, optionnel)" type="number" step="0.01" value={setInputs[focusedExercise.exercise_key]?.distanceKm ?? ''} onChange={(event) => setSetInputs((prev) => ({ ...prev, [focusedExercise.exercise_key]: { ...(prev[focusedExercise.exercise_key] ?? { weightKg: '', reps: '', rpe: '', duration: '', distanceKm: '' }), distanceKm: event.target.value } }))} />
+                        {(() => { const d = parseDurationToSeconds(setInputs[focusedExercise.exercise_key]?.duration ?? ''); const km = Number(setInputs[focusedExercise.exercise_key]?.distanceKm ?? '0'); const pace = d && km > 0 ? Math.round(d / km) : null; const speed = d && km > 0 ? (km / (d / 3600)) : null; return pace ? <p className="text-xs text-slate-300">Allure calculée: {formatPace(pace)}{speed ? ` · ${speed.toFixed(1)} km/h` : ''}</p> : null; })()}
+                        <input className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm" placeholder="RPE (optionnel)" type="number" step="0.5" value={setInputs[focusedExercise.exercise_key]?.rpe ?? ''} onChange={(event) => setSetInputs((prev) => ({ ...prev, [focusedExercise.exercise_key]: { ...(prev[focusedExercise.exercise_key] ?? { weightKg: '', reps: '', rpe: '', duration: '', distanceKm: '' }), rpe: event.target.value } }))} />
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-sm text-slate-300">Série: {Math.min(currentSetNumber, focusedExercise.sets_target)}/{focusedExercise.sets_target} · Répétitions cibles: {focusedExercise.target_reps_min}-{focusedExercise.target_reps_max}</p>
+                      {focusedExercise.note ? <p className="text-xs text-cyan-200">{focusedExercise.note}</p> : null}
+                      {focusedExercise.recommended_weight !== null ? <p className="text-xs text-slate-400">Recommandation: {focusedExercise.recommended_weight} kg</p> : null}
+                      <div className="grid gap-2">
+                        {focusedExercise.equipment_type !== 'bodyweight' && focusedExercise.equipment_type !== 'running' ? <input className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm" placeholder="Poids (kg)" type="number" value={setInputs[focusedExercise.exercise_key]?.weightKg ?? ''} onChange={(event) => setSetInputs((prev) => ({ ...prev, [focusedExercise.exercise_key]: { ...(prev[focusedExercise.exercise_key] ?? { weightKg: '', reps: '', rpe: '', duration: '', distanceKm: '' }), weightKg: event.target.value } }))} /> : null}
+                        <input className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm" placeholder="Répétitions" type="number" value={setInputs[focusedExercise.exercise_key]?.reps ?? ''} onChange={(event) => setSetInputs((prev) => ({ ...prev, [focusedExercise.exercise_key]: { ...(prev[focusedExercise.exercise_key] ?? { weightKg: '', reps: '', rpe: '', duration: '', distanceKm: '' }), reps: event.target.value } }))} />
+                        <input className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm" placeholder="RPE (optionnel)" type="number" step="0.5" value={setInputs[focusedExercise.exercise_key]?.rpe ?? ''} onChange={(event) => setSetInputs((prev) => ({ ...prev, [focusedExercise.exercise_key]: { ...(prev[focusedExercise.exercise_key] ?? { weightKg: '', reps: '', rpe: '', duration: '', distanceKm: '' }), rpe: event.target.value } }))} />
+                      </div>
+                    </>
+                  )}
                   <button className="w-full rounded-lg bg-violet-700 px-4 py-3 text-sm font-semibold disabled:opacity-60" disabled={savingSet || runnerMode !== 'input' || (sessionLogsCount[focusedExercise.exercise_key] ?? 0) >= focusedExercise.sets_target} onClick={handleValidateSet} type="button">
-                    {savingSet ? 'Validation...' : `Valider série ${Math.min(currentSetNumber, focusedExercise.sets_target)}`}
+                    {savingSet ? 'Validation…' : focusedExercise.kind === 'run' ? (focusedExercise.target_intervals ? 'Valider bloc' : 'Valider séance') : `Valider série ${Math.min(currentSetNumber, focusedExercise.sets_target)}`}
                   </button>
                 </div>
               )
@@ -1023,7 +1085,7 @@ export default function PlanPage() {
       <RestModal
         open={restModalOpen}
         exerciseName={restModalMeta.exerciseName}
-        validatedSetLabel={`Série ${restModalMeta.setNumber}/${restModalMeta.setsTarget} validée`}
+        validatedSetLabel={focusedExercise?.kind === 'run' ? 'Bloc validé' : `Série ${restModalMeta.setNumber}/${restModalMeta.setsTarget} validée`}
         recommendedSeconds={restModalMeta.recommendedSeconds}
         onNext={moveToNextStep}
         onClose={moveToNextStep}

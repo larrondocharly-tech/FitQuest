@@ -19,3 +19,17 @@ export const recommendPaceForWorkout = (
   if (type.includes('tempo')) return zones.tempo ? Math.round(zones.tempo * (1 - weekBoost)) : null;
   return zones.easy;
 };
+
+
+const toPace = (secPerKm: number): string => {
+  const mm = Math.floor(secPerKm / 60);
+  const ss = Math.round(secPerKm % 60);
+  return `${mm}:${String(ss).padStart(2, '0')} /km`;
+};
+
+export const formatPaceRange = (secPerKm: number | null): string | null => {
+  if (!secPerKm) return null;
+  const lower = Math.round(secPerKm * 0.98);
+  const upper = Math.round(secPerKm * 1.04);
+  return `${toPace(lower)}–${toPace(upper)}`;
+};

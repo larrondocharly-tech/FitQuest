@@ -39,12 +39,9 @@ type ExerciseLogRow = {
   exercise_key: string | null;
 };
 
-type ExerciseFormState = {
-  weightKg: string;
-  reps: string;
-  rpe: string;
-  restSeconds: number | null;
-  setIndex: number;
+type WorkoutSessionRow = {
+  id: string;
+  blueprint: SessionBlueprint | null;
 };
 
 type SessionSummary = {
@@ -69,6 +66,35 @@ type UserStatsRow = {
   streak_milestones: number[] | null;
 };
 
+type ExerciseItem = {
+  exercise_key: string;
+  exercise_name: string;
+  equipment_type: EquipmentType;
+  sets_target: number;
+  target_reps_min: number;
+  target_reps_max: number;
+  rpe_target: string | null;
+  recommended_weight: number | null;
+  note: string | null;
+  originalIndex: number;
+};
+
+type RunnerMode = 'input' | 'rest';
+
+type SetInputState = {
+  weightKg: string;
+  reps: string;
+  rpe: string;
+};
+
+type FinishCelebrationState = {
+  open: boolean;
+  xpGained: number;
+  oldXp: number;
+  newXp: number;
+  message: string;
+};
+
 const defaultPrefs: ProfilePrefs = {
   hero_class: 'Warrior',
   training_level: 'beginner',
@@ -78,31 +104,18 @@ const defaultPrefs: ProfilePrefs = {
   equipment: []
 };
 
-const dbErrorMessage = (message: string) => {
-  if (message.includes('does not exist')) {
-    return 'La base de données n’est pas à jour. Applique le schema SQL puis réessaie.';
-  }
-
-  return message;
-};
-
-const parseRepRange = (reps: string): { min: number; max: number } | null => {
-  const numbers = reps.match(/\d+/g);
-  if (!numbers || numbers.length === 0) {
-    return null;
-  }
-
-  if (numbers.length === 1) {
-    const value = Number(numbers[0]);
-    return { min: value, max: value };
-  }
-
-  return { min: Number(numbers[0]), max: Number(numbers[1]) };
-};
-
-const makeExerciseKey = (dayIndex: number, exerciseIndex: number): string => `${dayIndex}-${exerciseIndex}`;
+const encouragementPool = [
+  'Excellent boulot. La régularité fait les héros.',
+  'Tu viens de gagner de l’XP IRL et IG.',
+  'Propre. On progresse séance après séance.',
+  'GG. La prochaine séance sera encore mieux.'
+];
 
 const weightedEquipment = new Set<EquipmentType>(['barbell', 'dumbbell', 'machine']);
+const polyKeywords = ['squat', 'deadlift', 'bench', 'press', 'row', 'pull-up', 'dip', 'lunge', 'hip thrust'];
+const isoKeywords = ['curl', 'lateral raise', 'extension', 'fly', 'raise', 'pushdown', 'leg curl', 'calf'];
+
+const dbErrorMessage = (message: string) => (message.includes('does not exist') ? 'La base de données n’est pas à jour. Applique le schema SQL puis réessaie.' : message);
 
 const formatDate = (date: Date): string => {
   const year = date.getFullYear();
@@ -117,6 +130,25 @@ const addDays = (date: Date, days: number): Date => {
   return next;
 };
 
+const parseRepRangeFromScheme = (scheme: string | null | undefined): { min: number; max: number } => {
+  const safe = scheme ?? '';
+  const match = safe.match(/(\d+)\s*-\s*(\d+)/);
+  if (match) return { min: Number(match[1]), max: Number(match[2]) };
+  return { min: 8, max: 12 };
+};
+
+const parseSetsTarget = (sets: string | null | undefined): number => {
+  const value = Number((sets ?? '').match(/\d+/)?.[0]);
+  return Number.isFinite(value) && value > 0 ? value : 3;
+};
+
+const getExerciseClass = (name: string): 'poly' | 'iso' | 'other' => {
+  const normalized = name.toLowerCase();
+  if (polyKeywords.some((keyword) => normalized.includes(keyword))) return 'poly';
+  if (isoKeywords.some((keyword) => normalized.includes(keyword))) return 'iso';
+  return 'other';
+};
+
 export default function PlanPage() {
   const router = useRouter();
   const [prefs, setPrefs] = useState<ProfilePrefs | null>(null);
@@ -129,8 +161,7 @@ export default function PlanPage() {
   const [saving, setSaving] = useState(false);
   const [startingSession, setStartingSession] = useState(false);
   const [finishingSession, setFinishingSession] = useState(false);
-  const [savingSetKey, setSavingSetKey] = useState<string | null>(null);
-  const [exerciseForms, setExerciseForms] = useState<Record<string, ExerciseFormState>>({});
+  const [savingSet, setSavingSet] = useState(false);
   const [recommendations, setRecommendations] = useState<Record<string, Recommendation>>({});
   const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null);
   const [activeCycleWeek, setActiveCycleWeek] = useState(1);
@@ -141,16 +172,20 @@ export default function PlanPage() {
   const [scheduledWorkouts, setScheduledWorkouts] = useState<ScheduledWorkoutRow[]>([]);
   const [activeScheduledWorkoutId, setActiveScheduledWorkoutId] = useState<string | null>(null);
 
+  const [focusedExerciseIndex, setFocusedExerciseIndex] = useState(0);
+  const [currentSetNumber, setCurrentSetNumber] = useState(1);
+  const [runnerMode, setRunnerMode] = useState<RunnerMode>('input');
+  const [restSecondsDefault, setRestSecondsDefault] = useState(90);
+  const [setInputs, setSetInputs] = useState<Record<string, SetInputState>>({});
+  const [sessionLogsCount, setSessionLogsCount] = useState<Record<string, number>>({});
+  const [finishCelebration, setFinishCelebration] = useState<FinishCelebrationState>({ open: false, xpGained: 0, oldXp: 0, newXp: 0, message: encouragementPool[0] });
+  const [animatedXp, setAnimatedXp] = useState(0);
+
   const savePlan = async (userId: string, nextPlan: GeneratedPlan): Promise<string | null> => {
     setSaving(true);
     setError(null);
 
-    const { error: deactivateError } = await supabase
-      .from('workout_plans')
-      .update({ is_active: false })
-      .eq('user_id', userId)
-      .eq('is_active', true);
-
+    const { error: deactivateError } = await supabase.from('workout_plans').update({ is_active: false }).eq('user_id', userId).eq('is_active', true);
     if (deactivateError) {
       setSaving(false);
       setError(dbErrorMessage(deactivateError.message));
@@ -173,7 +208,6 @@ export default function PlanPage() {
       .single();
 
     setSaving(false);
-
     if (insertError) {
       setError(dbErrorMessage(insertError.message));
       return null;
@@ -183,16 +217,33 @@ export default function PlanPage() {
     return data.id;
   };
 
+  const fetchSessionLogCounts = async (userId: string, targetSessionId: string) => {
+    const { data, error: logError } = await supabase
+      .from('exercise_logs')
+      .select('exercise_key')
+      .eq('user_id', userId)
+      .eq('session_id', targetSessionId)
+      .returns<Array<{ exercise_key: string | null }>>();
+
+    if (logError) {
+      setError(dbErrorMessage(logError.message));
+      return;
+    }
+
+    const counts: Record<string, number> = {};
+    for (const row of data ?? []) {
+      const key = row.exercise_key ?? '';
+      counts[key] = (counts[key] ?? 0) + 1;
+    }
+    setSessionLogsCount(counts);
+  };
+
   useEffect(() => {
     const loadPlan = async () => {
       setLoading(true);
       setError(null);
 
-      const {
-        data: { user },
-        error: userError
-      } = await supabase.auth.getUser();
-
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
       if (userError || !user) {
         router.replace('/auth');
         return;
@@ -218,7 +269,6 @@ export default function PlanPage() {
         days_per_week: profile?.days_per_week ?? defaultPrefs.days_per_week,
         equipment: profile?.equipment ?? []
       };
-
       setPrefs(nextPrefs);
 
       const { data: activePlan, error: activePlanError } = await supabase
@@ -264,12 +314,10 @@ export default function PlanPage() {
       }
 
       const recommendationMap: Record<string, Recommendation> = {};
-
       for (const [dayIndex, dayPlan] of nextPlan.days.entries()) {
         for (const [exerciseIndex, exercise] of dayPlan.exercises.entries()) {
-          const key = makeExerciseKey(dayIndex, exerciseIndex);
-
-          const { data: keyLogs, error: keyLogsError } = await supabase
+          const uiKey = `${dayIndex}-${exerciseIndex}`;
+          const { data: keyLogs } = await supabase
             .from('exercise_logs')
             .select('session_id, weight_kg, reps, rpe, created_at, exercise_key')
             .eq('user_id', user.id)
@@ -278,34 +326,14 @@ export default function PlanPage() {
             .limit(30)
             .returns<ExerciseLogRow[]>();
 
-          if (keyLogsError) {
-            setError(dbErrorMessage(keyLogsError.message));
-            continue;
-          }
-
-          let logs = keyLogs ?? [];
-          if (!logs.length) {
-            const { data: nameLogs, error: nameLogsError } = await supabase
-              .from('exercise_logs')
-              .select('session_id, weight_kg, reps, rpe, created_at, exercise_key')
-              .eq('user_id', user.id)
-              .eq('exercise_name', exercise.exercise_name)
-              .order('created_at', { ascending: false })
-              .limit(30)
-              .returns<ExerciseLogRow[]>();
-
-            if (nameLogsError) {
-              setError(dbErrorMessage(nameLogsError.message));
-              continue;
-            }
-
-            logs = nameLogs ?? [];
-          }
-
-          const lastPerformance = getLastPerformance(logs, exercise.target_reps_min, exercise.target_reps_max);
-          recommendationMap[key] = recommendWeight({
+          const logs = keyLogs ?? [];
+          const parsed = parseRepRangeFromScheme(exercise.reps);
+          const minReps = exercise.target_reps_min ?? parsed.min;
+          const maxReps = exercise.target_reps_max ?? parsed.max;
+          const lastPerformance = getLastPerformance(logs, minReps, maxReps);
+          recommendationMap[uiKey] = recommendWeight({
             goal: nextPrefs.goal,
-            targetRepsRange: { min: exercise.target_reps_min, max: exercise.target_reps_max },
+            targetRepsRange: { min: minReps, max: maxReps },
             lastWeight: lastPerformance.lastWeight,
             lastReps: lastPerformance.lastReps,
             lastRpe: lastPerformance.lastRpe,
@@ -315,8 +343,8 @@ export default function PlanPage() {
           });
         }
       }
-
       setRecommendations(recommendationMap);
+
       const currentWeekStart = weekStart(new Date()).toISOString().slice(0, 10);
       const { data: weeklyQuest } = await supabase
         .from('weekly_quests')
@@ -324,7 +352,6 @@ export default function PlanPage() {
         .eq('user_id', user.id)
         .eq('week_start', currentWeekStart)
         .maybeSingle<WeeklyQuestRow>();
-
       setWeeklyQuestProgress(weeklyQuest ?? { completed_sessions: 0, target_sessions: 3, completed: false });
 
       if (currentPlanId) {
@@ -337,19 +364,89 @@ export default function PlanPage() {
         }
       }
 
+      const { data: existingSession } = await supabase
+        .from('workout_sessions')
+        .select('id, blueprint')
+        .eq('user_id', user.id)
+        .is('ended_at', null)
+        .order('started_at', { ascending: false })
+        .limit(1)
+        .maybeSingle<WorkoutSessionRow>();
+
+      if (existingSession?.id) {
+        setSessionId(existingSession.id);
+        setActiveBlueprint(existingSession.blueprint ?? null);
+        await fetchSessionLogCounts(user.id, existingSession.id);
+      }
+
       setLoading(false);
     };
 
     loadPlan();
   }, [router]);
 
+  const workoutItems = useMemo<ExerciseItem[]>(() => {
+    if (!plan) return [];
+    const dayExercises = plan.days[selectedDayIndex]?.exercises ?? [];
+    const sourceExercises = activeBlueprint?.exercises ?? dayExercises;
+
+    return sourceExercises.map((exercise, index) => {
+      const fallback = dayExercises[index];
+      const parsed = parseRepRangeFromScheme(exercise.reps ?? fallback?.reps);
+      const targetMin = exercise.target_reps_min ?? fallback?.target_reps_min ?? parsed.min;
+      const targetMax = exercise.target_reps_max ?? fallback?.target_reps_max ?? parsed.max;
+      const recWeight =
+        typeof (exercise as { recommended_weight?: unknown }).recommended_weight === 'number'
+          ? ((exercise as { recommended_weight?: number }).recommended_weight ?? null)
+          : recommendations[`${selectedDayIndex}-${index}`]?.recommendedWeight ?? null;
+      const progressionNote = (exercise as { progression_note?: string }).progression_note;
+      const note = progressionNote ?? exercise.notes ?? fallback?.notes ?? null;
+      const rpeTarget = note?.match(/rpe\s*([\d-]+)/i)?.[1] ?? null;
+
+      return {
+        exercise_key: exercise.exercise_key,
+        exercise_name: exercise.exercise_name,
+        equipment_type: exercise.equipment_type,
+        sets_target: parseSetsTarget(exercise.sets ?? fallback?.sets),
+        target_reps_min: targetMin,
+        target_reps_max: targetMax,
+        rpe_target: rpeTarget,
+        recommended_weight: recWeight,
+        note,
+        originalIndex: index
+      };
+    });
+  }, [activeBlueprint, plan, recommendations, selectedDayIndex]);
+
+  const sortedSummaryItems = useMemo(() => {
+    return [...workoutItems].sort((a, b) => {
+      const rank = { poly: 0, iso: 1, other: 2 } as const;
+      const aRank = rank[getExerciseClass(a.exercise_name)];
+      const bRank = rank[getExerciseClass(b.exercise_name)];
+      if (aRank === bRank) return a.originalIndex - b.originalIndex;
+      return aRank - bRank;
+    });
+  }, [workoutItems]);
+
+  const focusedExercise = workoutItems[focusedExerciseIndex] ?? null;
+
+  useEffect(() => {
+    if (!focusedExercise) {
+      setCurrentSetNumber(1);
+      return;
+    }
+    const completed = sessionLogsCount[focusedExercise.exercise_key] ?? 0;
+    setCurrentSetNumber(Math.min(completed + 1, focusedExercise.sets_target));
+  }, [focusedExercise, sessionLogsCount]);
+
+  const allExercisesCompleted = useMemo(() => {
+    if (!workoutItems.length) return false;
+    return workoutItems.every((item) => (sessionLogsCount[item.exercise_key] ?? 0) >= item.sets_target);
+  }, [sessionLogsCount, workoutItems]);
+
   const handleRegenerate = async () => {
     if (!prefs) return;
-
-    const {
-      data: { user }
-    } = await supabase.auth.getUser();
-
+    const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
       router.replace('/auth');
       return;
@@ -368,6 +465,7 @@ export default function PlanPage() {
     setSessionId(null);
     setSessionSummary(null);
     setActiveBlueprint(null);
+    setSessionLogsCount({});
     setCycleStartDate(new Date().toISOString().slice(0, 10));
     setActiveCycleWeek(1);
     const createdPlanId = await savePlan(user.id, nextPlan);
@@ -386,11 +484,7 @@ export default function PlanPage() {
 
   const handleAdvanceWeek = async () => {
     if (!activePlanId || !cycleStartDate) return;
-
-    const {
-      data: { user }
-    } = await supabase.auth.getUser();
-
+    const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
     const start = new Date(`${cycleStartDate}T00:00:00`);
@@ -398,12 +492,7 @@ export default function PlanPage() {
     const nextStart = start.toISOString().slice(0, 10);
     const nextWeek = getCycleWeek(nextStart, new Date());
 
-    const { error: updateError } = await supabase
-      .from('workout_plans')
-      .update({ cycle_start_date: nextStart, cycle_week: nextWeek })
-      .eq('id', activePlanId)
-      .eq('user_id', user.id);
-
+    const { error: updateError } = await supabase.from('workout_plans').update({ cycle_start_date: nextStart, cycle_week: nextWeek }).eq('id', activePlanId).eq('user_id', user.id);
     if (updateError) {
       setError(dbErrorMessage(updateError.message));
       return;
@@ -422,10 +511,7 @@ export default function PlanPage() {
     setStartingSession(true);
     setError(null);
 
-    const {
-      data: { user }
-    } = await supabase.auth.getUser();
-
+    const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
       router.replace('/auth');
       return;
@@ -436,9 +522,7 @@ export default function PlanPage() {
 
     const today = formatDate(new Date());
     const scheduleForToday = scheduledWorkouts.find((item) => item.workout_date === today && item.status !== 'skipped') ?? null;
-    const fallbackPlanned = [...scheduledWorkouts]
-      .filter((item) => item.status === 'planned')
-      .sort((a, b) => a.workout_date.localeCompare(b.workout_date))[0] ?? null;
+    const fallbackPlanned = [...scheduledWorkouts].filter((item) => item.status === 'planned').sort((a, b) => a.workout_date.localeCompare(b.workout_date))[0] ?? null;
     const targetSchedule = scheduleForToday ?? fallbackPlanned;
     const nextDayIndex = targetSchedule?.day_index ?? selectedDayIndex;
     setSelectedDayIndex(nextDayIndex);
@@ -451,7 +535,6 @@ export default function PlanPage() {
     }
 
     const logsByExercise: Record<string, ExerciseLogForProgression[]> = {};
-
     for (const exercise of dayPlan.exercises) {
       const { data: logs } = await supabase
         .from('exercise_logs')
@@ -461,31 +544,18 @@ export default function PlanPage() {
         .order('created_at', { ascending: false })
         .limit(30)
         .returns<ExerciseLogForProgression[]>();
-
       logsByExercise[exercise.exercise_key] = logs ?? [];
     }
 
-    const blueprint = buildNextSessionBlueprint({
-      day: dayPlan,
-      goal: prefs.goal,
-      cycleWeek: currentCycleWeek,
-      logsByExercise
-    });
+    const blueprint = buildNextSessionBlueprint({ day: dayPlan, goal: prefs.goal, cycleWeek: currentCycleWeek, logsByExercise });
 
     const { data, error: sessionError } = await supabase
       .from('workout_sessions')
-      .insert({
-        user_id: user.id,
-        plan_id: activePlanId,
-        started_at: new Date().toISOString(),
-        location: prefs.location,
-        blueprint
-      })
+      .insert({ user_id: user.id, plan_id: activePlanId, started_at: new Date().toISOString(), location: prefs.location, blueprint })
       .select('id')
       .single();
 
     setStartingSession(false);
-
     if (sessionError) {
       setError(dbErrorMessage(sessionError.message));
       return;
@@ -495,6 +565,106 @@ export default function PlanPage() {
     setActiveBlueprint(blueprint);
     setSessionId(data.id);
     setActiveScheduledWorkoutId(targetSchedule?.id ?? null);
+    setSessionLogsCount({});
+    setFocusedExerciseIndex(0);
+    setRunnerMode('input');
+  };
+
+  const handleValidateSet = async () => {
+    if (!sessionId || !activePlanId || !focusedExercise || savingSet) return;
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      router.replace('/auth');
+      return;
+    }
+
+    const inputKey = focusedExercise.exercise_key;
+    const input = setInputs[inputKey] ?? { weightKg: '', reps: '', rpe: '' };
+    const repsValue = Number(input.reps);
+    if (!Number.isFinite(repsValue) || repsValue <= 0) {
+      setError('Entre un nombre de reps valide avant de valider la série.');
+      return;
+    }
+
+    if (weightedEquipment.has(focusedExercise.equipment_type) && !input.weightKg) {
+      setError('Le poids est obligatoire pour cet exercice.');
+      return;
+    }
+
+    if (repsValue < focusedExercise.target_reps_min || repsValue > focusedExercise.target_reps_max) {
+      setWarning(`⚠️ ${focusedExercise.exercise_name}: ${repsValue} reps hors plage cible (${focusedExercise.target_reps_min}-${focusedExercise.target_reps_max}).`);
+    } else {
+      setWarning(null);
+    }
+
+    const setIndex = (sessionLogsCount[focusedExercise.exercise_key] ?? 0) + 1;
+    const exerciseClass = getExerciseClass(focusedExercise.exercise_name);
+    const restDefault = exerciseClass === 'poly' ? 120 : exerciseClass === 'iso' ? 60 : 90;
+
+    setSavingSet(true);
+    setError(null);
+
+    const { error: insertError } = await supabase.from('exercise_logs').insert({
+      user_id: user.id,
+      session_id: sessionId,
+      plan_id: activePlanId,
+      day_index: selectedDayIndex,
+      exercise_index: focusedExercise.originalIndex,
+      exercise_key: focusedExercise.exercise_key,
+      exercise_name: focusedExercise.exercise_name,
+      equipment_type: focusedExercise.equipment_type,
+      set_index: setIndex,
+      target_reps_min: focusedExercise.target_reps_min,
+      target_reps_max: focusedExercise.target_reps_max,
+      weight_kg: input.weightKg ? Number(input.weightKg) : null,
+      reps: repsValue,
+      rpe: input.rpe ? Number(input.rpe) : null,
+      rest_seconds: restDefault
+    });
+
+    if (insertError) {
+      setSavingSet(false);
+      setError(dbErrorMessage(insertError.message));
+      return;
+    }
+
+    const { data: userStats, error: statFetchError } = await supabase.from('user_stats').select('xp').eq('user_id', user.id).maybeSingle<{ xp: number }>();
+    if (statFetchError) {
+      setSavingSet(false);
+      setError(dbErrorMessage(statFetchError.message));
+      return;
+    }
+
+    const nextXp = (userStats?.xp ?? 0) + 10;
+    const nextLevel = xpToLevel(nextXp);
+    const { error: upsertError } = await supabase.from('user_stats').upsert({ user_id: user.id, xp: nextXp, level: nextLevel }, { onConflict: 'user_id' });
+
+    if (upsertError) {
+      setSavingSet(false);
+      setError(dbErrorMessage(upsertError.message));
+      return;
+    }
+
+    setSessionLogsCount((prev) => ({ ...prev, [focusedExercise.exercise_key]: (prev[focusedExercise.exercise_key] ?? 0) + 1 }));
+    setSetInputs((prev) => ({ ...prev, [inputKey]: { ...input, reps: '', rpe: '' } }));
+    setRestSecondsDefault(restDefault);
+    setRunnerMode('rest');
+    setSavingSet(false);
+  };
+
+  const handleRestComplete = () => {
+    if (!focusedExercise) {
+      setRunnerMode('input');
+      return;
+    }
+
+    const completed = sessionLogsCount[focusedExercise.exercise_key] ?? 0;
+    if (completed >= focusedExercise.sets_target) {
+      const nextIndex = workoutItems.findIndex((item) => (sessionLogsCount[item.exercise_key] ?? 0) < item.sets_target);
+      if (nextIndex >= 0) setFocusedExerciseIndex(nextIndex);
+    }
+    setRunnerMode('input');
   };
 
   const handleFinishWorkout = async () => {
@@ -503,10 +673,7 @@ export default function PlanPage() {
     setFinishingSession(true);
     setError(null);
 
-    const {
-      data: { user }
-    } = await supabase.auth.getUser();
-
+    const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
       router.replace('/auth');
       return;
@@ -528,13 +695,7 @@ export default function PlanPage() {
       return;
     }
 
-    const { data: logs, error: logsError } = await supabase
-      .from('exercise_logs')
-      .select('weight_kg, reps')
-      .eq('user_id', user.id)
-      .eq('session_id', sessionId)
-      .returns<Array<{ weight_kg: number | null; reps: number }>>();
-
+    const { data: logs, error: logsError } = await supabase.from('exercise_logs').select('weight_kg, reps').eq('user_id', user.id).eq('session_id', sessionId).returns<Array<{ weight_kg: number | null; reps: number }>>();
     if (logsError) {
       setFinishingSession(false);
       setError(dbErrorMessage(logsError.message));
@@ -543,13 +704,7 @@ export default function PlanPage() {
 
     const setsCount = logs?.length ?? 0;
     const totalVolume = (logs ?? []).reduce((sum, set) => sum + (set.weight_kg ? set.weight_kg * set.reps : 0), 0);
-    const durationMinutes = Math.max(
-      1,
-      Math.round(
-        (new Date(updatedSession.ended_at ?? nowIso).getTime() - new Date(updatedSession.started_at).getTime()) /
-          (1000 * 60)
-      )
-    );
+    const durationMinutes = Math.max(1, Math.round((new Date(updatedSession.ended_at ?? nowIso).getTime() - new Date(updatedSession.started_at).getTime()) / (1000 * 60)));
 
     let xpBonus = setsCount >= 6 ? 50 : 0;
 
@@ -565,11 +720,7 @@ export default function PlanPage() {
     const targetSessions = existingQuest?.target_sessions ?? 3;
     const updatedCompletedSessions = previousSessions + 1;
     const questNowCompleted = updatedCompletedSessions >= targetSessions;
-    const shouldGrantQuestXp = questNowCompleted && !(existingQuest?.completed ?? false);
-
-    if (shouldGrantQuestXp) {
-      xpBonus += 200;
-    }
+    if (questNowCompleted && !(existingQuest?.completed ?? false)) xpBonus += 200;
 
     const { data: userStats, error: statsFetchError } = await supabase
       .from('user_stats')
@@ -590,27 +741,17 @@ export default function PlanPage() {
     const nextStreak = previousWorkoutDate === yesterday ? prevStreak + 1 : 1;
     const nextBest = Math.max(userStats?.streak_best ?? 0, nextStreak);
     const reachedMilestones = new Set<number>((userStats?.streak_milestones ?? []).map(Number));
-    const streakMilestones = [3, 7, 14];
-    const streakXpBonus = streakMilestones.includes(nextStreak) && !reachedMilestones.has(nextStreak) ? 100 : 0;
-
-    if (streakXpBonus > 0) {
+    if ([3, 7, 14].includes(nextStreak) && !reachedMilestones.has(nextStreak)) {
       reachedMilestones.add(nextStreak);
-      xpBonus += streakXpBonus;
+      xpBonus += 100;
     }
 
-    const nextXp = (userStats?.xp ?? 0) + xpBonus;
+    const oldXp = userStats?.xp ?? 0;
+    const nextXp = oldXp + xpBonus;
     const nextLevel = xpToLevel(nextXp);
 
     const { error: statsUpsertError } = await supabase.from('user_stats').upsert(
-      {
-        user_id: user.id,
-        xp: nextXp,
-        level: nextLevel,
-        streak_current: nextStreak,
-        streak_best: nextBest,
-        last_workout_date: today,
-        streak_milestones: Array.from(reachedMilestones.values())
-      },
+      { user_id: user.id, xp: nextXp, level: nextLevel, streak_current: nextStreak, streak_best: nextBest, last_workout_date: today, streak_milestones: Array.from(reachedMilestones.values()) },
       { onConflict: 'user_id' }
     );
 
@@ -620,170 +761,55 @@ export default function PlanPage() {
       return;
     }
 
-    const { error: questError } = await supabase.from('weekly_quests').upsert(
-      {
-        user_id: user.id,
-        week_start: currentWeekStart,
-        target_sessions: targetSessions,
-        completed_sessions: updatedCompletedSessions,
-        completed: questNowCompleted
-      },
+    await supabase.from('weekly_quests').upsert(
+      { user_id: user.id, week_start: currentWeekStart, target_sessions: targetSessions, completed_sessions: updatedCompletedSessions, completed: questNowCompleted },
       { onConflict: 'user_id,week_start' }
     );
 
-    if (questError) {
-      setFinishingSession(false);
-      setError(dbErrorMessage(questError.message));
-      return;
-    }
-
     if (activeScheduledWorkoutId) {
-      const { error: scheduleUpdateError } = await supabase
-        .from('scheduled_workouts')
-        .update({ status: 'done', session_id: sessionId })
-        .eq('id', activeScheduledWorkoutId)
-        .eq('user_id', user.id);
-
-      if (scheduleUpdateError) {
-        setFinishingSession(false);
-        setError(dbErrorMessage(scheduleUpdateError.message));
-        return;
-      }
+      await supabase.from('scheduled_workouts').update({ status: 'done', session_id: sessionId }).eq('id', activeScheduledWorkoutId).eq('user_id', user.id);
     }
 
     try {
       const refreshedSchedule = plan && activePlanId ? await ensureWeekSchedule(user.id, plan, activePlanId) : [];
       setScheduledWorkouts(refreshedSchedule);
-    } catch (scheduleError) {
-      const message = scheduleError instanceof Error ? scheduleError.message : 'Impossible d’actualiser le planning.';
-      setError(dbErrorMessage(message));
+    } catch {
+      // best effort
     }
 
-    setWeeklyQuestProgress({
-      completed_sessions: updatedCompletedSessions,
-      target_sessions: targetSessions,
-      completed: questNowCompleted
-    });
+    setWeeklyQuestProgress({ completed_sessions: updatedCompletedSessions, target_sessions: targetSessions, completed: questNowCompleted });
     setSessionSummary({ durationMinutes, setsCount, totalVolume, xpBonus });
     setActiveBlueprint(null);
     setSessionId(null);
     setActiveScheduledWorkoutId(null);
+    setSessionLogsCount({});
+    setRunnerMode('input');
+    setFinishCelebration({
+      open: true,
+      xpGained: xpBonus,
+      oldXp,
+      newXp: nextXp,
+      message: encouragementPool[Math.floor(Math.random() * encouragementPool.length)]
+    });
+    setAnimatedXp(oldXp);
     setFinishingSession(false);
   };
 
-  const setExerciseForm = (key: string, updater: (prev: ExerciseFormState) => ExerciseFormState) => {
-    setExerciseForms((current) => {
-      const prev = current[key] ?? { weightKg: '', reps: '', rpe: '', restSeconds: null, setIndex: 1 };
-      return { ...current, [key]: updater(prev) };
-    });
-  };
+  useEffect(() => {
+    if (!finishCelebration.open) return;
+    let raf = window.setInterval(() => {
+      setAnimatedXp((prev) => {
+        if (prev >= finishCelebration.newXp) {
+          window.clearInterval(raf);
+          return finishCelebration.newXp;
+        }
+        return Math.min(finishCelebration.newXp, prev + Math.max(1, Math.ceil((finishCelebration.newXp - finishCelebration.oldXp) / 20)));
+      });
+    }, 35);
+    return () => window.clearInterval(raf);
+  }, [finishCelebration]);
 
-  const handleSaveSet = async (dayIndex: number, exerciseIndex: number) => {
-    if (!sessionId || !plan || !prefs || !activePlanId) {
-      setError('Démarre une session avant de sauvegarder des séries.');
-      return;
-    }
-
-    const sourceExercises = activeBlueprint?.exercises ?? plan.days[dayIndex]?.exercises;
-    const exercise = sourceExercises?.[exerciseIndex];
-    if (!exercise) return;
-
-    const {
-      data: { user }
-    } = await supabase.auth.getUser();
-
-    if (!user) {
-      router.replace('/auth');
-      return;
-    }
-
-    const key = makeExerciseKey(dayIndex, exerciseIndex);
-    const form = exerciseForms[key] ?? { weightKg: '', reps: '', rpe: '', restSeconds: null, setIndex: 1 };
-
-    const repsValue = Number(form.reps);
-    if (!Number.isFinite(repsValue) || repsValue <= 0) {
-      setError('Entre un nombre de reps valide avant de sauvegarder.');
-      return;
-    }
-
-    if (weightedEquipment.has(exercise.equipment_type) && !form.weightKg) {
-      const shouldContinue = window.confirm('Ce mouvement requiert une charge. Continuer sans renseigner le poids ?');
-      if (!shouldContinue) return;
-    }
-
-    if (repsValue < exercise.target_reps_min || repsValue > exercise.target_reps_max) {
-      setWarning(`⚠️ ${exercise.exercise_name}: ${repsValue} reps hors plage cible (${exercise.target_reps_min}-${exercise.target_reps_max}).`);
-    } else {
-      setWarning(null);
-    }
-
-    setSavingSetKey(key);
-    setError(null);
-
-    const { error: insertError } = await supabase.from('exercise_logs').insert({
-      user_id: user.id,
-      session_id: sessionId,
-      plan_id: activePlanId,
-      day_index: dayIndex,
-      exercise_index: exerciseIndex,
-      exercise_key: exercise.exercise_key,
-      exercise_name: exercise.exercise_name,
-      equipment_type: exercise.equipment_type,
-      set_index: form.setIndex,
-      target_reps_min: exercise.target_reps_min,
-      target_reps_max: exercise.target_reps_max,
-      weight_kg: form.weightKg ? Number(form.weightKg) : null,
-      reps: repsValue,
-      rpe: form.rpe ? Number(form.rpe) : null,
-      rest_seconds: form.restSeconds
-    });
-
-    if (insertError) {
-      setSavingSetKey(null);
-      setError(dbErrorMessage(insertError.message));
-      return;
-    }
-
-    const { data: userStats, error: statFetchError } = await supabase.from('user_stats').select('xp').eq('user_id', user.id).maybeSingle<{ xp: number }>();
-
-    if (statFetchError) {
-      setSavingSetKey(null);
-      setError(dbErrorMessage(statFetchError.message));
-      return;
-    }
-
-    const nextXp = (userStats?.xp ?? 0) + 10;
-    const nextLevel = xpToLevel(nextXp);
-
-    const { error: upsertError } = await supabase.from('user_stats').upsert({ user_id: user.id, xp: nextXp, level: nextLevel }, { onConflict: 'user_id' });
-
-    if (upsertError) {
-      setSavingSetKey(null);
-      setError(dbErrorMessage(upsertError.message));
-      return;
-    }
-
-    setExerciseForm(key, (prev) => ({ ...prev, reps: '', rpe: '', setIndex: prev.setIndex + 1 }));
-    setSavingSetKey(null);
-  };
-
-  const planDescription = useMemo(() => {
-    if (!sessionId) return 'Démarre une session pour enregistrer les séries.';
-    return `Session en cours (${sessionId.slice(0, 8)}...)`;
-  }, [sessionId]);
-
-  const cycleLabel = `S${activeCycleWeek}`;
-  const todayDate = formatDate(new Date());
-  const sortedSchedule = [...scheduledWorkouts].sort((a, b) => a.workout_date.localeCompare(b.workout_date));
-  const todaysWorkout = sortedSchedule.find((item) => item.workout_date === todayDate) ?? null;
-  const nextPlannedWorkout = sortedSchedule.find((item) => item.status === 'planned' && item.workout_date >= todayDate) ?? null;
-  const workoutOfDayLabel = todaysWorkout?.status === 'done'
-    ? 'Completed'
-    : todaysWorkout?.status === 'planned'
-      ? "Start today's workout"
-      : nextPlannedWorkout
-        ? `Next workout: ${new Date(`${nextPlannedWorkout.workout_date}T00:00:00`).toLocaleDateString()}`
-        : 'No workout scheduled this week';
+  const planDescription = useMemo(() => (!sessionId ? 'Démarre une session pour lancer le runner.' : `Session en cours (${sessionId.slice(0, 8)}...)`), [sessionId]);
 
   if (loading) return <p className="text-slate-300">Chargement du plan...</p>;
 
@@ -795,50 +821,29 @@ export default function PlanPage() {
           <p className="text-slate-300">Ton plan hebdomadaire personnalisé selon tes préférences.</p>
           <p className="text-xs text-slate-400">{planDescription}</p>
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-            <span className="rounded-full border border-violet-400/30 bg-violet-900/30 px-2 py-1 text-violet-100">Cycle {cycleLabel}</span>
+            <span className="rounded-full border border-violet-400/30 bg-violet-900/30 px-2 py-1 text-violet-100">Cycle S{activeCycleWeek}</span>
             {isDeloadWeek(activeCycleWeek) ? <span className="rounded-full border border-amber-400/30 bg-amber-900/30 px-2 py-1 text-amber-100">Deload</span> : null}
             {weeklyQuestProgress ? <span className="rounded-full border border-cyan-400/30 bg-cyan-900/30 px-2 py-1 text-cyan-100">Quête: {weeklyQuestProgress.completed_sessions}/{weeklyQuestProgress.target_sessions}</span> : null}
           </div>
         </div>
 
         <div className="flex flex-wrap gap-2">
-          <button className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-60" disabled={startingSession || !activePlanId || Boolean(sessionId)} onClick={handleStartSession} type="button">
-            {sessionId ? 'Session started' : startingSession ? 'Starting...' : 'Start session'}
+          <button className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60" disabled={startingSession || !activePlanId || Boolean(sessionId)} onClick={handleStartSession} type="button">
+            {sessionId ? 'Session active' : startingSession ? 'Starting...' : 'Start session'}
           </button>
-          <button className="rounded-lg bg-cyan-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-cyan-600 disabled:opacity-60" disabled={!sessionId || finishingSession} onClick={handleFinishWorkout} type="button">
-            {finishingSession ? 'Finishing...' : 'Finish workout'}
-          </button>
-          <button className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-violet-500 disabled:opacity-60" disabled={saving} onClick={handleRegenerate} type="button">
+          <button className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60" disabled={saving} onClick={handleRegenerate} type="button">
             {saving ? 'Génération...' : 'Regenerate plan'}
           </button>
           {process.env.NODE_ENV !== 'production' ? (
-            <button className="rounded-lg bg-amber-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-600" onClick={handleAdvanceWeek} type="button">
-              Advance week
-            </button>
+            <button className="rounded-lg bg-amber-700 px-4 py-2 text-sm font-semibold text-white" onClick={handleAdvanceWeek} type="button">Advance week</button>
           ) : null}
-          <Link className="rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-sm transition hover:bg-slate-800" href="/dashboard">
-            Back to dashboard
-          </Link>
+          <Link className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold text-white" href="/dashboard">Back dashboard</Link>
         </div>
       </div>
 
-      <div className="rounded-xl border border-emerald-500/30 bg-emerald-900/10 p-4">
-        <h3 className="text-lg font-semibold text-emerald-200">Workout of the day</h3>
-        <p className="mt-1 text-sm text-slate-200">{workoutOfDayLabel}</p>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button
-            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-60"
-            disabled={startingSession || Boolean(sessionId) || todaysWorkout?.status === 'done' || (!todaysWorkout && !nextPlannedWorkout)}
-            onClick={handleStartSession}
-            type="button"
-          >
-            {todaysWorkout?.status === 'done' ? 'Completed' : startingSession ? 'Starting...' : "Start today's workout"}
-          </button>
-        </div>
-      </div>
+      {error ? <p className="rounded-md border border-rose-500/30 bg-rose-900/20 p-3 text-sm text-rose-200">{error}</p> : null}
+      {warning ? <p className="rounded-md border border-amber-500/30 bg-amber-900/20 p-3 text-sm text-amber-200">{warning}</p> : null}
 
-      {error ? <p className="rounded-md border border-red-500/30 bg-red-900/20 p-2 text-sm text-red-200">{error}</p> : null}
-      {warning ? <p className="rounded-md border border-amber-500/30 bg-amber-900/20 p-2 text-sm text-amber-200">{warning}</p> : null}
       {sessionSummary ? (
         <div className="rounded-xl border border-cyan-500/30 bg-cyan-900/10 p-4 text-sm">
           <h3 className="text-lg font-semibold text-cyan-200">Résumé de session</h3>
@@ -850,7 +855,7 @@ export default function PlanPage() {
       ) : null}
 
       {plan ? (
-        <div className="space-y-4">
+        <>
           <div className="rounded-xl border border-violet-500/30 bg-slate-900/80 p-5">
             <h3 className="text-xl font-semibold text-violet-200">{plan.title}</h3>
             <p className="mt-2 text-slate-300">Split: {plan.split}</p>
@@ -860,55 +865,114 @@ export default function PlanPage() {
             <label className="text-sm text-slate-300" htmlFor="day-selector">Jour de session</label>
             <select className="ml-2 rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm" id="day-selector" onChange={(event) => setSelectedDayIndex(Number(event.target.value))} value={selectedDayIndex}>
               {plan.days.map((dayPlan, dayIndex) => (
-                <option key={dayPlan.day} value={dayIndex}>
-                  {dayPlan.day} - {dayPlan.focus}
-                </option>
+                <option key={dayPlan.day} value={dayIndex}>{dayPlan.day} - {dayPlan.focus}</option>
               ))}
             </select>
           </div>
 
-          {plan.days.map((dayPlan, dayIndex) => (
-            <article className={`rounded-xl border border-slate-800 bg-slate-900/60 p-5 ${dayIndex === selectedDayIndex ? '' : 'opacity-60'}`} key={dayPlan.day + dayPlan.focus}>
-              <h4 className="text-lg font-semibold">{dayPlan.day} - {dayPlan.focus}</h4>
-              <ul className="mt-3 space-y-2 text-sm text-slate-200">
-                {dayPlan.exercises.map((exercise, exerciseIndex) => {
-                  const key = makeExerciseKey(dayIndex, exerciseIndex);
-                  const form = exerciseForms[key] ?? { weightKg: '', reps: '', rpe: '', restSeconds: null, setIndex: 1 };
-                  const blueprintExercise = dayIndex === selectedDayIndex ? activeBlueprint?.exercises[exerciseIndex] : undefined;
-                  const recommendation = recommendations[key];
-
-                  return (
-                    <li className="rounded-md border border-slate-800 bg-slate-950/50 p-3" key={`${dayPlan.day}-${exercise.exercise_key}-${exerciseIndex}`}>
-                      <p className="font-medium">{exercise.exercise_name}</p>
-                      <p className="text-slate-400">{blueprintExercise?.sets ?? exercise.sets} x {exercise.reps}</p>
-                      <p className="text-xs text-slate-500">equipment: {exercise.equipment_type} · key: {exercise.exercise_key}</p>
-                      <p className="text-xs text-emerald-300">Recommended reps: {blueprintExercise?.recommended_reps ?? recommendation?.recommendedReps ?? `${exercise.target_reps_min}-${exercise.target_reps_max}`}</p>
-                      <p className="text-xs text-emerald-300">Recommended weight: {(blueprintExercise?.recommended_weight ?? recommendation?.recommendedWeight) === null || (blueprintExercise?.recommended_weight ?? recommendation?.recommendedWeight) === undefined ? 'N/A' : `${blueprintExercise?.recommended_weight ?? recommendation?.recommendedWeight} kg`}</p>
-                      {(blueprintExercise?.progression_note ?? recommendation?.progressionNote) ? <p className="text-xs text-cyan-200">{blueprintExercise?.progression_note ?? recommendation?.progressionNote}</p> : null}
-                      {exercise.notes ? <p className="text-xs text-slate-400">{exercise.notes}</p> : null}
-
-                      <div className="mt-3 grid gap-2 md:grid-cols-4">
-                        <input className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm" onChange={(event) => setExerciseForm(key, (prev) => ({ ...prev, weightKg: event.target.value }))} placeholder="Poids (kg)" type="number" value={form.weightKg} />
-                        <input className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm" onChange={(event) => setExerciseForm(key, (prev) => ({ ...prev, reps: event.target.value }))} placeholder="Reps" type="number" value={form.reps} />
-                        <input className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm" onChange={(event) => setExerciseForm(key, (prev) => ({ ...prev, rpe: event.target.value }))} placeholder="RPE (optionnel)" step="0.5" type="number" value={form.rpe} />
-                        <input className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm" placeholder="Rest (sec)" readOnly value={form.restSeconds ?? ''} />
+          {sessionId ? (
+            <div className="space-y-4">
+              <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+                <h4 className="text-lg font-semibold text-violet-200">Résumé de la séance</h4>
+                <p className="mb-3 text-sm text-slate-400">{plan.title}</p>
+                <div className="space-y-2 text-sm">
+                  {sortedSummaryItems.map((item) => {
+                    const completed = (sessionLogsCount[item.exercise_key] ?? 0) >= item.sets_target;
+                    const focused = focusedExercise?.exercise_key === item.exercise_key;
+                    return (
+                      <div className="flex items-center justify-between rounded-md border border-slate-800 bg-slate-950/50 px-3 py-2" key={item.exercise_key}>
+                        <p>{item.exercise_name} — {item.sets_target} séries • {item.target_reps_min}-{item.target_reps_max} reps</p>
+                        <span>{completed ? '✅' : focused ? '▶️' : '⏳'}</span>
                       </div>
+                    );
+                  })}
+                </div>
+              </div>
 
-                      <p className="mt-2 text-xs text-slate-400">Set #{form.setIndex}</p>
-                      <RestTimer onUseRest={(seconds) => setExerciseForm(key, (prev) => ({ ...prev, restSeconds: seconds }))} />
+              <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
+                <aside className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+                  <h5 className="font-semibold">Exercices</h5>
+                  <div className="mt-3 space-y-2">
+                    {workoutItems.map((item, idx) => (
+                      <button
+                        className={`w-full rounded-md border px-3 py-2 text-left text-sm ${idx === focusedExerciseIndex ? 'border-violet-400 bg-violet-900/30' : 'border-slate-700 bg-slate-950/50'}`}
+                        key={item.exercise_key}
+                        onClick={() => {
+                          setFocusedExerciseIndex(idx);
+                          setRunnerMode('input');
+                        }}
+                        type="button"
+                      >
+                        <p className="font-medium">{item.exercise_name}</p>
+                        <p className="text-xs text-slate-400">{sessionLogsCount[item.exercise_key] ?? 0}/{item.sets_target} séries</p>
+                      </button>
+                    ))}
+                  </div>
+                </aside>
 
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <button className="rounded-md bg-slate-700 px-3 py-1 text-xs text-white" onClick={() => setExerciseForm(key, (prev) => ({ ...prev, setIndex: prev.setIndex + 1 }))} type="button">Add set</button>
-                        <button className="rounded-md bg-violet-700 px-3 py-1 text-xs text-white disabled:opacity-60" disabled={!sessionId || savingSetKey === key} onClick={() => handleSaveSet(dayIndex, exerciseIndex)} type="button">
-                          {savingSetKey === key ? 'Saving...' : 'Save set'}
+                <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+                  {focusedExercise ? (
+                    runnerMode === 'rest' ? (
+                      <RestTimer defaultSeconds={restSecondsDefault} onStop={handleRestComplete} />
+                    ) : (
+                      <>
+                        <h5 className="text-xl font-semibold">{focusedExercise.exercise_name}</h5>
+                        <p className="mt-1 text-sm text-slate-300">
+                          Poids recommandé: {focusedExercise.recommended_weight === null ? 'N/A' : `${focusedExercise.recommended_weight} kg`} ·
+                          Cible: {focusedExercise.target_reps_min}-{focusedExercise.target_reps_max} reps ·
+                          Série {currentSetNumber}/{focusedExercise.sets_target}
+                        </p>
+                        {focusedExercise.note ? <p className="mt-1 text-xs text-cyan-200">{focusedExercise.note}</p> : null}
+
+                        <div className="mt-4 grid gap-3 md:grid-cols-3">
+                          {focusedExercise.equipment_type !== 'bodyweight' ? (
+                            <input
+                              className="rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                              onChange={(event) => setSetInputs((prev) => ({ ...prev, [focusedExercise.exercise_key]: { ...(prev[focusedExercise.exercise_key] ?? { reps: '', rpe: '', weightKg: '' }), weightKg: event.target.value } }))}
+                              placeholder="Poids (kg)"
+                              type="number"
+                              value={setInputs[focusedExercise.exercise_key]?.weightKg ?? ''}
+                            />
+                          ) : <div className="rounded-md border border-slate-800 bg-slate-950/50 px-3 py-2 text-xs text-slate-400">Poids non requis (bodyweight)</div>}
+                          <input className="rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm" onChange={(event) => setSetInputs((prev) => ({ ...prev, [focusedExercise.exercise_key]: { ...(prev[focusedExercise.exercise_key] ?? { reps: '', rpe: '', weightKg: '' }), reps: event.target.value } }))} placeholder="Reps" type="number" value={setInputs[focusedExercise.exercise_key]?.reps ?? ''} />
+                          <input className="rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm" onChange={(event) => setSetInputs((prev) => ({ ...prev, [focusedExercise.exercise_key]: { ...(prev[focusedExercise.exercise_key] ?? { reps: '', rpe: '', weightKg: '' }), rpe: event.target.value } }))} placeholder="RPE (optionnel)" step="0.5" type="number" value={setInputs[focusedExercise.exercise_key]?.rpe ?? ''} />
+                        </div>
+
+                        <button className="mt-4 rounded-lg bg-violet-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60" disabled={savingSet} onClick={handleValidateSet} type="button">
+                          {savingSet ? 'Validation...' : `Valider série ${currentSetNumber}`}
                         </button>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            </article>
-          ))}
+                      </>
+                    )
+                  ) : <p className="text-sm text-slate-300">Aucun exercice.</p>}
+                </div>
+              </div>
+
+              {allExercisesCompleted ? (
+                <button className="w-full rounded-xl bg-emerald-600 px-6 py-4 text-lg font-bold text-white disabled:opacity-60" disabled={finishingSession} onClick={handleFinishWorkout} type="button">
+                  {finishingSession ? 'Finalisation...' : 'Séance terminée'}
+                </button>
+              ) : null}
+            </div>
+          ) : (
+            <p className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-sm text-slate-300">Démarre une session pour lancer le workout runner guidé.</p>
+          )}
+        </>
+      ) : null}
+
+      {finishCelebration.open ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-md rounded-xl border border-emerald-500/30 bg-slate-900 p-6">
+            <h3 className="text-2xl font-bold text-emerald-300">Bravo 💪</h3>
+            <p className="mt-2 text-slate-200">Tu as gagné +{finishCelebration.xpGained} XP</p>
+            <p className="mt-1 text-sm text-slate-400">{finishCelebration.message}</p>
+            <div className="mt-4">
+              <div className="h-3 w-full rounded-full bg-slate-800">
+                <div className="h-3 rounded-full bg-emerald-500 transition-all duration-300" style={{ width: `${Math.min(100, ((animatedXp % 1000) / 1000) * 100)}%` }} />
+              </div>
+              <p className="mt-2 text-xs text-slate-300">XP: {animatedXp} / {finishCelebration.newXp}</p>
+            </div>
+            <button className="mt-5 w-full rounded-lg bg-emerald-600 px-4 py-2 font-semibold text-white" onClick={() => setFinishCelebration((prev) => ({ ...prev, open: false }))} type="button">Continuer</button>
+          </div>
         </div>
       ) : null}
     </section>

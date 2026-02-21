@@ -121,3 +121,130 @@ create trigger set_workout_plans_updated_at
   before update on public.workout_plans
   for each row
   execute procedure public.set_updated_at();
+
+create table if not exists public.workout_sessions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  plan_id uuid references public.workout_plans(id) on delete set null,
+  started_at timestamptz not null default now(),
+  ended_at timestamptz,
+  location text,
+  notes text,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.exercise_logs (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  session_id uuid not null references public.workout_sessions(id) on delete cascade,
+  plan_id uuid references public.workout_plans(id) on delete set null,
+  day_index int not null,
+  exercise_index int not null,
+  exercise_name text not null,
+  set_index int not null,
+  target_reps_min int,
+  target_reps_max int,
+  weight_kg numeric,
+  reps int not null,
+  rpe numeric,
+  rest_seconds int,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.user_stats (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  xp int not null default 0,
+  level int not null default 1,
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists exercise_logs_user_exercise_created_idx
+  on public.exercise_logs (user_id, exercise_name, created_at desc);
+
+create index if not exists exercise_logs_user_plan_day_exercise_created_idx
+  on public.exercise_logs (user_id, plan_id, day_index, exercise_name, created_at desc);
+
+alter table public.workout_sessions enable row level security;
+alter table public.exercise_logs enable row level security;
+alter table public.user_stats enable row level security;
+
+drop policy if exists "select own workout sessions" on public.workout_sessions;
+create policy "select own workout sessions"
+  on public.workout_sessions
+  for select
+  using (auth.uid() = user_id);
+
+drop policy if exists "insert own workout sessions" on public.workout_sessions;
+create policy "insert own workout sessions"
+  on public.workout_sessions
+  for insert
+  with check (auth.uid() = user_id);
+
+drop policy if exists "update own workout sessions" on public.workout_sessions;
+create policy "update own workout sessions"
+  on public.workout_sessions
+  for update
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+drop policy if exists "delete own workout sessions" on public.workout_sessions;
+create policy "delete own workout sessions"
+  on public.workout_sessions
+  for delete
+  using (auth.uid() = user_id);
+
+drop policy if exists "select own exercise logs" on public.exercise_logs;
+create policy "select own exercise logs"
+  on public.exercise_logs
+  for select
+  using (auth.uid() = user_id);
+
+drop policy if exists "insert own exercise logs" on public.exercise_logs;
+create policy "insert own exercise logs"
+  on public.exercise_logs
+  for insert
+  with check (auth.uid() = user_id);
+
+drop policy if exists "update own exercise logs" on public.exercise_logs;
+create policy "update own exercise logs"
+  on public.exercise_logs
+  for update
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+drop policy if exists "delete own exercise logs" on public.exercise_logs;
+create policy "delete own exercise logs"
+  on public.exercise_logs
+  for delete
+  using (auth.uid() = user_id);
+
+drop policy if exists "select own user stats" on public.user_stats;
+create policy "select own user stats"
+  on public.user_stats
+  for select
+  using (auth.uid() = user_id);
+
+drop policy if exists "insert own user stats" on public.user_stats;
+create policy "insert own user stats"
+  on public.user_stats
+  for insert
+  with check (auth.uid() = user_id);
+
+drop policy if exists "update own user stats" on public.user_stats;
+create policy "update own user stats"
+  on public.user_stats
+  for update
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+drop policy if exists "delete own user stats" on public.user_stats;
+create policy "delete own user stats"
+  on public.user_stats
+  for delete
+  using (auth.uid() = user_id);
+
+drop trigger if exists set_user_stats_updated_at on public.user_stats;
+create trigger set_user_stats_updated_at
+  before update on public.user_stats
+  for each row
+  execute procedure public.set_updated_at();

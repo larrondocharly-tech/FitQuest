@@ -23,10 +23,30 @@ type PlanSummary = {
   };
 };
 
+type UserStats = {
+  xp: number;
+  level: number;
+};
+
+type WorkoutSessionSummary = {
+  started_at: string;
+  ended_at: string | null;
+};
+
+const dbErrorMessage = (message: string) => {
+  if (message.includes('does not exist')) {
+    return 'La base de données n’est pas à jour. Applique le schema SQL puis réessaie.';
+  }
+
+  return message;
+};
+
 export default function DashboardPage() {
   const router = useRouter();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [planSummary, setPlanSummary] = useState<PlanSummary | null>(null);
+  const [stats, setStats] = useState<UserStats | null>(null);
+  const [lastSession, setLastSession] = useState<WorkoutSessionSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -48,7 +68,7 @@ export default function DashboardPage() {
         .maybeSingle();
 
       if (profileError) {
-        setError(profileError.message);
+        setError(dbErrorMessage(profileError.message));
         return;
       }
 
@@ -60,11 +80,37 @@ export default function DashboardPage() {
         .maybeSingle<PlanSummary>();
 
       if (planError) {
-        setError(planError.message);
+        setError(dbErrorMessage(planError.message));
+        return;
+      }
+
+      const { data: statsData, error: statsError } = await supabase
+        .from('user_stats')
+        .select('xp, level')
+        .eq('user_id', user.id)
+        .maybeSingle<UserStats>();
+
+      if (statsError) {
+        setError(dbErrorMessage(statsError.message));
+        return;
+      }
+
+      const { data: sessionData, error: sessionError } = await supabase
+        .from('workout_sessions')
+        .select('started_at, ended_at')
+        .eq('user_id', user.id)
+        .order('started_at', { ascending: false })
+        .limit(1)
+        .maybeSingle<WorkoutSessionSummary>();
+
+      if (sessionError) {
+        setError(dbErrorMessage(sessionError.message));
         return;
       }
 
       setPlanSummary(planData ?? null);
+      setStats(statsData ?? { xp: 0, level: 1 });
+      setLastSession(sessionData ?? null);
       setProfile({
         email: data?.email ?? user.email ?? null,
         hero_name: data?.hero_name ?? null,
@@ -94,6 +140,25 @@ export default function DashboardPage() {
         <p className="text-slate-300">Nom: {profile?.hero_name ?? 'Non défini'}</p>
         <p className="text-slate-300">Classe: {profile?.hero_class ?? 'Non définie'}</p>
         <p className="text-slate-300">Niveau: {profile?.level ?? 1}</p>
+      </div>
+
+      <div className="max-w-md rounded-xl border border-amber-500/30 bg-slate-900/80 p-5">
+        <h3 className="mb-3 text-xl font-semibold text-amber-200">Progression RPG</h3>
+        <p className="text-slate-300">XP: {stats?.xp ?? 0}</p>
+        <p className="text-slate-300">Level: {stats?.level ?? 1}</p>
+        <p className="mt-2 text-xs text-slate-400">Gagne +10 XP par série sauvegardée depuis l’écran plan.</p>
+      </div>
+
+      <div className="max-w-md rounded-xl border border-cyan-500/30 bg-slate-900/80 p-5">
+        <h3 className="mb-3 text-xl font-semibold text-cyan-200">Dernière session</h3>
+        {lastSession ? (
+          <>
+            <p className="text-slate-300">Début: {new Date(lastSession.started_at).toLocaleString()}</p>
+            <p className="text-slate-300">Fin: {lastSession.ended_at ? new Date(lastSession.ended_at).toLocaleString() : 'En cours'}</p>
+          </>
+        ) : (
+          <p className="text-slate-300">Aucune session enregistrée.</p>
+        )}
       </div>
 
       <div className="max-w-md rounded-xl border border-emerald-500/30 bg-slate-900/80 p-5">

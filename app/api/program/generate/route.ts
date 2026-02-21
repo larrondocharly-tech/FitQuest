@@ -140,6 +140,34 @@ const getModelText = (payload: unknown) => {
   return chunks.join('\n');
 };
 
+type InputMessage = {
+  role: 'developer' | 'user' | 'assistant' | 'system';
+  content: Array<{ type: 'input_text'; text: string }>;
+};
+
+const toInputTextMessage = (message: {
+  role: InputMessage['role'];
+  content: string | Array<{ type?: string; text?: string }>;
+}): InputMessage => {
+  if (typeof message.content === 'string') {
+    return {
+      role: message.role,
+      content: [{ type: 'input_text', text: message.content }]
+    };
+  }
+
+  return {
+    role: message.role,
+    content: message.content
+      .filter((item): item is { type?: string; text?: string } => Boolean(item && typeof item === 'object'))
+      .map((item) => ({
+        type: 'input_text',
+        text: typeof item.text === 'string' ? item.text : ''
+      }))
+      .filter((item) => item.text.length > 0)
+  };
+};
+
 export async function POST(request: Request) {
   const openAiKey = process.env.OPENAI_API_KEY;
   const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -159,25 +187,15 @@ export async function POST(request: Request) {
     const input = validateInput(payload);
 
     const inputMessages = [
-      {
+      toInputTextMessage({
         role: 'developer',
-        content: [
-          {
-            type: 'input_text',
-            text:
-              'Tu es un coach sportif expert. Réponds en JSON STRICT uniquement (aucun markdown, aucun texte hors JSON). Programme réaliste, periodisé et adapté au profil. Respecte impérativement: weekPlans.length==weeks, chaque semaine contient exactement sessionsPerWeek sessions, 4..8 exercices par session, restSec 30..240. En cas de blessure/douleur, éviter les mouvements à risque et proposer alternatives. Ajoute des safetyNotes sans avis médical.'
-          }
-        ]
-      },
-      {
+        content:
+          'Tu es un coach sportif expert. Réponds en JSON STRICT uniquement (aucun markdown, aucun texte hors JSON). Programme réaliste, periodisé et adapté au profil. Respecte impérativement: weekPlans.length==weeks, chaque semaine contient exactement sessionsPerWeek sessions, 4..8 exercices par session, restSec 30..240. En cas de blessure/douleur, éviter les mouvements à risque et proposer alternatives. Ajoute des safetyNotes sans avis médical.'
+      }),
+      toInputTextMessage({
         role: 'user',
-        content: [
-          {
-            type: 'input_text',
-            text: `Profil utilisateur:\n${JSON.stringify(input, null, 2)}`
-          }
-        ]
-      }
+        content: `Profil utilisateur:\n${JSON.stringify(input, null, 2)}`
+      })
     ];
 
     diag = {
@@ -188,7 +206,9 @@ export async function POST(request: Request) {
       }))
     };
 
-    const hasInvalidTypes = diag.input_types.some((m) => m.types.some((type) => type === 'text' || type === '(non-array-content)'));
+    const hasInvalidTypes =
+      inputMessages.some((m) => !Array.isArray(m.content) || m.content.length === 0 || m.content.some((c) => c.type !== 'input_text' || !c.text)) ||
+      diag.input_types.some((m) => m.types.some((type) => type === 'text' || type === '(non-array-content)'));
     if (hasInvalidTypes) {
       return Response.json(
         {

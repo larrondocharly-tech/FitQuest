@@ -25,9 +25,15 @@ type RecommendParams = {
   lastWeight: number | null;
   lastReps: number | null;
   lastRpe: number | null;
-  equipment?: 'barbell' | 'dumbbell' | 'unknown';
+  equipment?: 'barbell' | 'dumbbell' | 'machine' | 'bodyweight' | 'band' | 'unknown';
   failedBelowTargetMinTwice?: boolean;
   targetMaxHitTwiceRecently?: boolean;
+};
+
+export type Recommendation = {
+  recommendedWeight: number | null;
+  recommendedReps: string;
+  progressionNote?: string;
 };
 
 const roundToHalf = (value: number): number => Math.round(value * 2) / 2;
@@ -111,6 +117,12 @@ export const getLastPerformance = (
   };
 };
 
+const getIncrement = (equipment: RecommendParams['equipment']): number => {
+  if (equipment === 'dumbbell') return 1;
+  if (equipment === 'barbell' || equipment === 'machine') return 2.5;
+  return 2.5;
+};
+
 export const recommendWeight = ({
   goal,
   targetRepsRange,
@@ -120,44 +132,58 @@ export const recommendWeight = ({
   equipment = 'unknown',
   failedBelowTargetMinTwice = false,
   targetMaxHitTwiceRecently = false
-}: RecommendParams): number | null => {
-  if (lastWeight === null || lastReps === null) {
-    return null;
+}: RecommendParams): Recommendation => {
+  const recommendedReps = `${targetRepsRange.min}-${targetRepsRange.max}`;
+
+  if (equipment === 'bodyweight') {
+    if (lastReps !== null && lastReps >= targetRepsRange.max) {
+      return {
+        recommendedWeight: null,
+        recommendedReps,
+        progressionNote: 'Atteins le haut de plage: ajoute une variation plus difficile.'
+      };
+    }
+
+    return { recommendedWeight: null, recommendedReps };
   }
 
-  const increment = equipment === 'dumbbell' ? 1 : 2.5;
+  if (lastWeight === null || lastReps === null) {
+    return { recommendedWeight: null, recommendedReps };
+  }
+
+  const increment = getIncrement(equipment);
 
   if (goal === 'muscle') {
     if (lastReps >= targetRepsRange.max && (lastRpe === null || lastRpe <= 8.5)) {
-      return roundToHalf(lastWeight + increment);
+      return { recommendedWeight: roundToHalf(lastWeight + increment), recommendedReps };
     }
 
     if (lastReps < targetRepsRange.min) {
-      return Math.max(0, roundToHalf(lastWeight - 2.5));
+      return { recommendedWeight: Math.max(0, roundToHalf(lastWeight - 2.5)), recommendedReps };
     }
 
-    return roundToHalf(lastWeight);
+    return { recommendedWeight: roundToHalf(lastWeight), recommendedReps };
   }
 
   if (goal === 'strength') {
     if (failedBelowTargetMinTwice) {
-      return Math.max(0, roundToHalf(lastWeight * 0.95));
+      return { recommendedWeight: Math.max(0, roundToHalf(lastWeight * 0.95)), recommendedReps };
     }
 
     if (lastReps >= targetRepsRange.max) {
-      return roundToHalf(lastWeight + 2.5);
+      return { recommendedWeight: roundToHalf(lastWeight + increment), recommendedReps };
     }
 
-    return roundToHalf(lastWeight);
+    return { recommendedWeight: roundToHalf(lastWeight), recommendedReps };
   }
 
   if (goal === 'fat_loss' || goal === 'general') {
     if (targetMaxHitTwiceRecently) {
-      return roundToHalf(lastWeight + 2.5);
+      return { recommendedWeight: roundToHalf(lastWeight + increment), recommendedReps };
     }
 
-    return roundToHalf(lastWeight);
+    return { recommendedWeight: roundToHalf(lastWeight), recommendedReps };
   }
 
-  return roundToHalf(lastWeight);
+  return { recommendedWeight: roundToHalf(lastWeight), recommendedReps };
 };

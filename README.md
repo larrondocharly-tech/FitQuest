@@ -10,7 +10,7 @@ Créez un fichier `.env.local` **à la racine du projet** (au même niveau que `
 cp .env.example .env.local
 ```
 
-Puis renseignez :
+Puis renseignez : 
 
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`

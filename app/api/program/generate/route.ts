@@ -3,6 +3,8 @@ import { createClient } from '@supabase/supabase-js';
 
 export const runtime = 'nodejs';
 
+const BUILD_TAG = 'gen-v3-input_text-2026-02-21';
+
 type Goal = 'fat_loss' | 'muscle_gain' | 'strength' | 'recomp' | 'endurance' | 'general_fitness';
 type Level = 'beginner' | 'intermediate' | 'advanced';
 
@@ -144,8 +146,8 @@ export async function POST(request: Request) {
   const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  if (!openAiKey) return NextResponse.json({ error: 'OPENAI_API_KEY manquant' }, { status: 500 });
-  if (!supabaseUrl || !supabaseAnonKey) return NextResponse.json({ error: 'Configuration Supabase manquante' }, { status: 500 });
+  if (!openAiKey) return NextResponse.json({ error: 'OPENAI_API_KEY manquant', build_tag: BUILD_TAG }, { status: 500 });
+  if (!supabaseUrl || !supabaseAnonKey) return NextResponse.json({ error: 'Configuration Supabase manquante', build_tag: BUILD_TAG }, { status: 500 });
 
   try {
     const payload = await request.json();
@@ -225,7 +227,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, planId: data.id, plan });
   } catch (error) {
     return NextResponse.json(
-      { error: 'Échec de génération du programme', details: error instanceof Error ? error.message : 'Erreur inconnue' },
+      { error: 'Échec de génération du programme', details: error instanceof Error ? error.message : 'Erreur inconnue', build_tag: BUILD_TAG },
       { status: 500 }
     );
   }

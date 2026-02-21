@@ -48,12 +48,20 @@ type Exercise = {
   exercise_key: string;
   exercise_name: string;
   pattern: ExercisePattern;
+  kind: 'strength' | 'run';
   equipment_type: EquipmentType;
   sets: string;
   reps: string;
   target_reps_min: number;
   target_reps_max: number;
   notes?: string;
+  target_duration_min?: number | null;
+  target_distance_km?: number | null;
+  target_intervals?: number | null;
+  work_seconds?: number | null;
+  rest_seconds?: number | null;
+  target_pace_min_per_km?: string | null;
+  target_speed_kmh?: string | null;
 };
 
 type PlanDay = {
@@ -74,6 +82,11 @@ type PatternDefinition = {
   sets: string;
   reps: string;
   notes?: string;
+  target_duration_min?: number | null;
+  target_distance_km?: number | null;
+  target_intervals?: number | null;
+  work_seconds?: number | null;
+  rest_seconds?: number | null;
 };
 
 const weekdayLabels = ['Jour 1', 'Jour 2', 'Jour 3', 'Jour 4', 'Jour 5', 'Jour 6'];
@@ -184,12 +197,20 @@ const resolvePattern = (patternDef: PatternDefinition, prefs: UserPrefs): Exerci
     exercise_key: variant.key || slugifyExercise(variant.name),
     exercise_name: variant.name,
     pattern: patternDef.pattern,
+    kind: variant.equipment_type === 'running' ? 'run' : 'strength',
     equipment_type: variant.equipment_type,
     sets: patternDef.sets,
     reps: patternDef.reps,
     target_reps_min: targetRange.min,
     target_reps_max: targetRange.max,
-    notes: patternDef.notes
+    notes: patternDef.notes,
+    target_duration_min: patternDef.target_duration_min ?? null,
+    target_distance_km: patternDef.target_distance_km ?? null,
+    target_intervals: patternDef.target_intervals ?? null,
+    work_seconds: patternDef.work_seconds ?? null,
+    rest_seconds: patternDef.rest_seconds ?? null,
+    target_pace_min_per_km: null,
+    target_speed_kmh: null
   };
 };
 
@@ -198,10 +219,15 @@ const buildPatternDays = (archetype: Archetype, daysPerWeek: number, goal: Goal)
 
   if (archetype === 'running') {
     const runningDays: Array<{ focus: string; patterns: PatternDefinition[] }> = [
-      { focus: 'Run Quality', patterns: [{ pattern: 'intervals', sets: '1', reps: '4-8', notes: 'Récup 1:1 sur les fractions' }, { pattern: 'easy', sets: '1', reps: '20-30' }] },
-      { focus: 'Run Tempo', patterns: [{ pattern: 'tempo', sets: '1', reps: '15-25' }] },
-      { focus: 'Run Long', patterns: [{ pattern: 'long', sets: '1', reps: '35-60' }] },
-      { focus: 'Run Easy', patterns: [{ pattern: 'easy', sets: '1', reps: '25-40' }] }
+      {
+        focus: 'Fractionné',
+        patterns: [
+          { pattern: 'intervals', sets: '1', reps: '1', target_duration_min: 24, target_intervals: 6, work_seconds: 60, rest_seconds: 60, notes: 'Fractionné: 6 x (1:00 rapide / 1:00 récup). Échauffement et retour au calme inclus.' }
+        ]
+      },
+      { focus: 'Tempo', patterns: [{ pattern: 'tempo', sets: '1', reps: '1', target_duration_min: 35, notes: 'Échauffement 10 min + tempo 10-20 min + retour au calme 10 min.' }] },
+      { focus: 'Sortie longue', patterns: [{ pattern: 'long', sets: '1', reps: '1', target_duration_min: 60, notes: 'Sortie longue en aisance respiratoire.' }] },
+      { focus: 'Footing facile', patterns: [{ pattern: 'easy', sets: '1', reps: '1', target_duration_min: 35, notes: 'Footing facile, régulier et relâché.' }] }
     ];
     return runningDays.slice(0, Math.min(days, runningDays.length));
   }

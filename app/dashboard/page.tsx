@@ -195,7 +195,7 @@ export default function DashboardPage() {
       <div className="max-w-md rounded-xl border border-amber-500/30 bg-slate-900/80 p-5">
         <h3 className="mb-3 text-xl font-semibold text-amber-200">Progression RPG</h3>
         <p className="text-slate-300">XP: {stats?.xp ?? 0}</p>
-        <p className="text-slate-300">Level: {stats?.level ?? 1}</p>
+        <p className="text-slate-300">Niveau: {stats?.level ?? 1}</p>
         <p className="text-slate-300">Streak actuel: {stats?.streak_current ?? 0}</p>
         <p className="text-slate-300">Meilleure streak: {stats?.streak_best ?? 0}</p>
         <p className="mt-2 text-xs text-slate-400">Gagne +10 XP par série sauvegardée depuis l’écran plan.</p>
@@ -220,9 +220,9 @@ export default function DashboardPage() {
       </div>
 
       <div className="max-w-md rounded-xl border border-indigo-500/30 bg-slate-900/80 p-5">
-        <h3 className="mb-3 text-xl font-semibold text-indigo-200">Mesocycle</h3>
+        <h3 className="mb-3 text-xl font-semibold text-indigo-200">Mésocycle</h3>
         <p className="text-slate-300">Semaine en cours: S{cycleWeek}</p>
-        <p className="text-slate-300">Statut: {isDeloadWeek(cycleWeek) ? 'Deload' : 'Progression'}</p>
+        <p className="text-slate-300">Statut: {isDeloadWeek(cycleWeek) ? 'Allégement' : 'Progression'}</p>
       </div>
 
       <div className="max-w-md rounded-xl border border-fuchsia-500/30 bg-slate-900/80 p-5">
@@ -236,9 +236,9 @@ export default function DashboardPage() {
         {planSummary ? (
           <>
             <p className="text-slate-300">Titre: {planSummary.title}</p>
-            <p className="text-slate-300">Split: {planSummary.plan?.split ?? 'N/A'}</p>
-            <p className="text-slate-300">Jours/semaine: {planSummary.plan?.meta?.days_per_week ?? 'N/A'}</p>
-            <p className="text-slate-300">Lieu: {planSummary.plan?.meta?.location ?? 'N/A'}</p>
+            <p className="text-slate-300">Répartition: {planSummary.plan?.split ?? 'N/D'}</p>
+            <p className="text-slate-300">Jours/semaine: {planSummary.plan?.meta?.days_per_week ?? 'N/D'}</p>
+            <p className="text-slate-300">Lieu: {planSummary.plan?.meta?.location ?? 'N/D'}</p>
           </>
         ) : (
           <p className="text-slate-300">Aucun plan actif pour le moment.</p>
@@ -247,10 +247,10 @@ export default function DashboardPage() {
           Voir mon plan
         </Link>
         <Link className="mt-2 inline-flex rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-500" href="/library">
-          Browse plans
+          Parcourir les plans
         </Link>
         <Link className="mt-2 inline-flex rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-violet-500" href="/settings/coach">
-          Coach settings
+          Réglages du coach
         </Link>
       </div>
 

@@ -304,7 +304,7 @@ export default function OnboardingPage() {
               <>
                 <input className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm" placeholder="Cooper 12-min distance (m)" type="number" value={baseline.cooper_m} onChange={(e) => setBaseline((prev) => ({ ...prev, cooper_m: e.target.value }))} />
                 <input className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm" placeholder="5k time (sec)" type="number" value={baseline.fivek_time_sec} onChange={(e) => setBaseline((prev) => ({ ...prev, fivek_time_sec: e.target.value }))} />
-                <input className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm" placeholder="Easy pace (sec/km)" type="number" value={baseline.easy_pace_sec_per_km} onChange={(e) => setBaseline((prev) => ({ ...prev, easy_pace_sec_per_km: e.target.value }))} />
+                <input className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm" placeholder="Allure facile (sec/km)" type="number" value={baseline.easy_pace_sec_per_km} onChange={(e) => setBaseline((prev) => ({ ...prev, easy_pace_sec_per_km: e.target.value }))} />
               </>
             ) : null}
           </div>

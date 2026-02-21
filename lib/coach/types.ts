@@ -5,12 +5,20 @@ export type PlanExercise = {
   exercise_key: string;
   exercise_name: string;
   pattern?: string;
+  kind?: 'strength' | 'run';
   equipment_type: EquipmentType;
   sets: string;
   reps: string;
   target_reps_min: number;
   target_reps_max: number;
   notes?: string;
+  target_duration_min?: number | null;
+  target_distance_km?: number | null;
+  target_intervals?: number | null;
+  work_seconds?: number | null;
+  rest_seconds?: number | null;
+  target_pace_min_per_km?: string | null;
+  target_speed_kmh?: string | null;
 };
 
 export type PlanDay = {

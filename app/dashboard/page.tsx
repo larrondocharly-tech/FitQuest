@@ -249,6 +249,9 @@ export default function DashboardPage() {
         <Link className="mt-2 inline-flex rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-500" href="/library">
           Browse plans
         </Link>
+        <Link className="mt-2 inline-flex rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-violet-500" href="/settings/coach">
+          Coach settings
+        </Link>
       </div>
 
       {!profile?.hero_name ? (

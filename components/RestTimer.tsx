@@ -55,13 +55,13 @@ export default function RestTimer({ defaultSeconds, onStop }: RestTimerProps) {
 
   return (
     <div className="rounded-lg border border-violet-500/30 bg-violet-900/10 p-4">
-      <p className="text-xs uppercase tracking-wide text-violet-300">Repos</p>
+      <p className="text-xs uppercase tracking-wide text-violet-300">Timer de repos</p>
       <p className="text-4xl font-bold text-violet-100">{timerLabel}</p>
 
       <div className="mt-3 flex flex-wrap gap-2">
         {[60, 90, 120].map((preset) => (
           <button
-            className={`rounded-md px-3 py-1 text-xs ${selectedPreset === preset ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-200'}`}
+            className={`rounded-md px-3 py-2 text-sm ${selectedPreset === preset ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-200'}`}
             key={preset}
             onClick={() => applyPreset(preset)}
             type="button"
@@ -71,17 +71,11 @@ export default function RestTimer({ defaultSeconds, onStop }: RestTimerProps) {
         ))}
       </div>
 
-      <div className="mt-4 flex flex-wrap gap-2 text-sm">
-        <button className="rounded-md bg-amber-600 px-3 py-1 text-white" onClick={() => setIsRunning(false)} type="button">
-          Pause
+      <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
+        <button className="rounded-md bg-amber-600 px-3 py-2 font-medium text-white" onClick={() => setIsRunning((prev) => !prev)} type="button">
+          {isRunning ? 'Pause' : 'Reprendre'}
         </button>
-        <button className="rounded-md bg-emerald-600 px-3 py-1 text-white" onClick={() => setIsRunning(true)} type="button">
-          Reprendre
-        </button>
-        <button className="rounded-md bg-rose-700 px-3 py-1 text-white" onClick={onStop} type="button">
-          Stop repos
-        </button>
-        <button className="rounded-md bg-slate-700 px-3 py-1 text-white" onClick={() => applyPreset(selectedPreset)} type="button">
+        <button className="rounded-md bg-slate-700 px-3 py-2 font-medium text-white" onClick={() => applyPreset(selectedPreset)} type="button">
           Reset
         </button>
       </div>

@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
-import { generatePlan, type EquipmentType, type GeneratedPlan, type Goal, type Location, type TrainingLevel, type UserPrefs } from '@/lib/plan/generatePlan';
+import { generatePlan, type Archetype, type EquipmentType, type GeneratedPlan, type Goal, type Location, type TrainingLevel, type UserPrefs } from '@/lib/plan/generatePlan';
 import { getLastPerformance, recommendWeight, type ExerciseLogForProgression, type Recommendation, xpToLevel } from '@/lib/progression/recommendWeight';
 import { getCycleWeek, weekStart } from '@/lib/cycle/cycle';
 import { buildNextSessionBlueprint, type SessionBlueprint } from '@/lib/session/nextSession';
@@ -13,6 +13,8 @@ import { ensureWeekSchedule, type ScheduledWorkoutRow } from '@/lib/schedule/sch
 type ProfilePrefs = {
   hero_name: string | null;
   hero_class: string | null;
+  archetype: Archetype;
+  baseline: Record<string, number | null>;
   training_level: TrainingLevel;
   goal: Goal;
   location: Location;
@@ -68,6 +70,7 @@ type ExerciseItem = {
   target_reps_min: number;
   target_reps_max: number;
   recommended_weight: number | null;
+  recommended_pace_sec_per_km?: number | null;
   note: string | null;
   originalIndex: number;
   classType: 'poly' | 'iso' | 'other';
@@ -85,6 +88,8 @@ type RestModalProps = {
 const defaultPrefs: ProfilePrefs = {
   hero_name: null,
   hero_class: 'Warrior',
+  archetype: 'hypertrophy',
+  baseline: {},
   training_level: 'beginner',
   goal: 'muscle',
   location: 'gym',
@@ -344,7 +349,7 @@ export default function PlanPage() {
 
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
-        .select('hero_name, hero_class, training_level, goal, location, days_per_week, equipment')
+        .select('hero_name, hero_class, archetype, baseline, training_level, goal, location, days_per_week, equipment')
         .eq('id', user.id)
         .maybeSingle();
 
@@ -357,6 +362,8 @@ export default function PlanPage() {
       const nextPrefs: ProfilePrefs = {
         hero_name: profile?.hero_name ?? null,
         hero_class: profile?.hero_class ?? defaultPrefs.hero_class,
+        archetype: profile?.archetype ?? defaultPrefs.archetype,
+        baseline: (profile?.baseline ?? defaultPrefs.baseline) as Record<string, number | null>,
         training_level: profile?.training_level ?? defaultPrefs.training_level,
         goal: profile?.goal ?? defaultPrefs.goal,
         location: profile?.location ?? defaultPrefs.location,
@@ -388,7 +395,9 @@ export default function PlanPage() {
           goal: nextPrefs.goal,
           location: nextPrefs.location,
           days_per_week: nextPrefs.days_per_week,
-          equipment: nextPrefs.equipment
+          equipment: nextPrefs.equipment,
+          archetype: nextPrefs.archetype,
+          baseline: nextPrefs.baseline
         });
         planId = await savePlan(user.id, effectivePlan);
       }
@@ -489,6 +498,9 @@ export default function PlanPage() {
       const recWeight = typeof (exercise as { recommended_weight?: unknown }).recommended_weight === 'number'
         ? (exercise as { recommended_weight?: number }).recommended_weight ?? null
         : recommendations[`${selectedDayIndex}-${index}`]?.recommendedWeight ?? null;
+      const recommendedPace = typeof (exercise as { recommended_pace_sec_per_km?: unknown }).recommended_pace_sec_per_km === 'number'
+        ? (exercise as { recommended_pace_sec_per_km?: number }).recommended_pace_sec_per_km ?? null
+        : null;
 
       return {
         exercise_key: exercise.exercise_key ?? fallback?.exercise_key ?? `exercise-${index}`,
@@ -499,6 +511,7 @@ export default function PlanPage() {
         target_reps_min: targetMin,
         target_reps_max: targetMax,
         recommended_weight: recWeight,
+        recommended_pace_sec_per_km: recommendedPace,
         note: (exercise as { note?: string; notes?: string }).note ?? (exercise as { note?: string; notes?: string }).notes ?? null,
         originalIndex: index,
         classType: getExerciseClass(displayName)
@@ -596,7 +609,9 @@ export default function PlanPage() {
       day: dayPlan,
       goal: prefs.goal,
       cycleWeek: getCycleWeek(cycleStartDate ?? new Date(), new Date()),
-      logsByExercise
+      logsByExercise,
+      archetype: prefs.archetype,
+      baseline: prefs.baseline
     });
 
     const { data, error: insertError } = await supabase
@@ -830,7 +845,9 @@ export default function PlanPage() {
       goal: prefs.goal,
       location: prefs.location,
       days_per_week: prefs.days_per_week,
-      equipment: prefs.equipment
+      equipment: prefs.equipment,
+      archetype: prefs.archetype,
+      baseline: prefs.baseline
     });
 
     const createdPlanId = await savePlan(user.id, nextPlan);
@@ -933,9 +950,10 @@ export default function PlanPage() {
                   <h3 className="text-xl font-semibold">{focusedExercise.displayName}</h3>
                   <p className="text-sm text-slate-300">Série: {Math.min(currentSetNumber, focusedExercise.sets_target)}/{focusedExercise.sets_target} · Reps cible: {focusedExercise.target_reps_min}-{focusedExercise.target_reps_max}</p>
                   {focusedExercise.note ? <p className="text-xs text-cyan-200">{focusedExercise.note}</p> : null}
+                  {focusedExercise.recommended_pace_sec_per_km ? <p className="text-xs text-slate-400">Allure recommandée: {focusedExercise.recommended_pace_sec_per_km} sec/km</p> : null}
                   {focusedExercise.recommended_weight !== null ? <p className="text-xs text-slate-400">Recommandation: {focusedExercise.recommended_weight} kg</p> : null}
                   <div className="grid gap-2">
-                    {focusedExercise.equipment_type !== 'bodyweight' ? (
+                    {focusedExercise.equipment_type !== 'bodyweight' && focusedExercise.equipment_type !== 'running' ? (
                       <input
                         className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
                         placeholder="Poids (kg)"

@@ -1,21 +1,53 @@
 export type TrainingLevel = 'beginner' | 'intermediate' | 'advanced';
 export type Goal = 'muscle' | 'strength' | 'fat_loss' | 'general';
 export type Location = 'gym' | 'home';
+export type Archetype = 'calisthenics' | 'hypertrophy' | 'weightlifting' | 'running';
+
+export type Baseline = Record<string, number | null | undefined>;
 
 export type UserPrefs = {
-  hero_class: 'Warrior' | 'Mage' | 'Rogue' | string;
+  hero_class: 'Warrior' | 'Mage' | 'Rogue' | 'Ninja' | 'Titan' | 'Ranger' | 'Runner' | string;
   training_level: TrainingLevel;
   goal: Goal;
   location: Location;
   days_per_week: 2 | 3 | 4 | 5 | 6 | number;
   equipment: string[];
+  archetype?: Archetype;
+  baseline?: Baseline;
 };
 
-export type EquipmentType = 'barbell' | 'dumbbell' | 'machine' | 'bodyweight' | 'band' | 'unknown';
+export type EquipmentType = 'barbell' | 'dumbbell' | 'machine' | 'bodyweight' | 'band' | 'running' | 'unknown';
+
+type ExercisePattern =
+  | 'squat'
+  | 'hinge'
+  | 'horizontal_push'
+  | 'horizontal_pull'
+  | 'vertical_pull'
+  | 'vertical_push'
+  | 'delts_iso'
+  | 'abs'
+  | 'biceps'
+  | 'triceps'
+  | 'pull'
+  | 'push'
+  | 'legs'
+  | 'core'
+  | 'skill'
+  | 'snatch_tech'
+  | 'cleanjerk_tech'
+  | 'front_squat'
+  | 'pulls'
+  | 'accessories'
+  | 'intervals'
+  | 'tempo'
+  | 'easy'
+  | 'long';
 
 type Exercise = {
   exercise_key: string;
   exercise_name: string;
+  pattern: ExercisePattern;
   equipment_type: EquipmentType;
   sets: string;
   reps: string;
@@ -32,23 +64,16 @@ type PlanDay = {
 
 export type GeneratedPlan = {
   title: string;
-  meta: UserPrefs;
+  meta: UserPrefs & { archetype: Archetype };
   split: string;
   days: PlanDay[];
 };
 
-type ExerciseLibrary = {
-  horizontalPush: string;
-  verticalPush: string;
-  horizontalPull: string;
-  verticalPull: string;
-  squat: string;
-  hinge: string;
-  lateralRaise: string;
-  curls: string;
-  triceps: string;
-  core: string;
-  lunge: string;
+type PatternDefinition = {
+  pattern: ExercisePattern;
+  sets: string;
+  reps: string;
+  notes?: string;
 };
 
 const weekdayLabels = ['Jour 1', 'Jour 2', 'Jour 3', 'Jour 4', 'Jour 5', 'Jour 6'];
@@ -59,280 +84,177 @@ const slugifyExercise = (value: string): string =>
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '');
 
-const inferEquipmentType = (exerciseName: string): EquipmentType => {
-  const lower = exerciseName.toLowerCase();
-
-  if (lower.includes('barbell') || lower.includes('ez-bar')) return 'barbell';
-  if (lower.includes('dumbbell')) return 'dumbbell';
-  if (lower.includes('machine') || lower.includes('cable') || lower.includes('lat pulldown') || lower.includes('leg press')) return 'machine';
-  if (lower.includes('band')) return 'band';
-  if (
-    lower.includes('push-up') ||
-    lower.includes('pull-up') ||
-    lower.includes('chin-up') ||
-    lower.includes('plank') ||
-    lower.includes('hollow hold') ||
-    lower.includes('bodyweight') ||
-    lower.includes('inverted row')
-  ) {
-    return 'bodyweight';
-  }
-
-  return 'unknown';
-};
-
 const parseRepRange = (reps: string): { min: number; max: number } => {
   const numbers = reps.match(/\d+/g) ?? [];
-  if (!numbers.length) {
-    return { min: 8, max: 12 };
-  }
-
+  if (!numbers.length) return { min: 8, max: 12 };
   if (numbers.length === 1) {
     const value = Number(numbers[0]);
     return { min: value, max: value };
   }
-
   return { min: Number(numbers[0]), max: Number(numbers[1]) };
 };
 
-const makeExercise = (name: string, sets: string, reps: string, notes?: string): Exercise => {
-  const targetRange = parseRepRange(reps);
-  return {
-    exercise_key: slugifyExercise(name),
-    exercise_name: name,
-    equipment_type: inferEquipmentType(name),
-    sets,
-    reps,
-    target_reps_min: targetRange.min,
-    target_reps_max: targetRange.max,
-    notes
-  };
+export const mapHeroClassToArchetype = (heroClass: string | null | undefined): Archetype => {
+  if (heroClass === 'Ninja') return 'calisthenics';
+  if (heroClass === 'Titan') return 'weightlifting';
+  if (heroClass === 'Ranger' || heroClass === 'Runner') return 'running';
+  return 'hypertrophy';
 };
 
 const normalizeGoal = (prefs: UserPrefs): Goal => {
-  if (prefs.goal) {
-    return prefs.goal;
-  }
-
+  if (prefs.goal) return prefs.goal;
   return prefs.hero_class === 'Warrior' ? 'muscle' : 'general';
 };
 
-const getExerciseLibrary = (location: Location, equipment: string[]): ExerciseLibrary => {
-  if (location === 'gym') {
-    return {
-      horizontalPush: 'Barbell Bench Press',
-      verticalPush: 'Seated Dumbbell Shoulder Press',
-      horizontalPull: 'Barbell Row',
-      verticalPull: 'Lat Pulldown',
-      squat: 'Back Squat',
-      hinge: 'Deadlift / Romanian Deadlift',
-      lateralRaise: 'Dumbbell Lateral Raise',
-      curls: 'EZ-Bar Curl',
-      triceps: 'Cable Triceps Pushdown',
-      core: 'Cable Crunch',
-      lunge: 'Walking Lunges'
-    };
-  }
-
+const chooseVariant = (pattern: ExercisePattern, location: Location, equipment: string[]) => {
   const has = (item: string) => equipment.includes(item);
 
-  const horizontalPush = has('dumbbells')
-    ? 'Dumbbell Bench Press / Floor Press'
-    : 'Push-Ups';
-  const verticalPush = has('dumbbells')
-    ? 'Dumbbell Shoulder Press'
-    : 'Pike Push-Up';
-  const horizontalPull = has('dumbbells')
-    ? 'Single-Arm Dumbbell Row'
-    : has('bands')
-      ? 'Band Row'
-      : 'Inverted Row (if possible)';
-  const verticalPull = has('pullup_bar')
-    ? 'Pull-Ups / Chin-Ups'
-    : has('bands')
-      ? 'Band Lat Pulldown'
-      : horizontalPull;
-  const squat = has('dumbbells')
-    ? 'Goblet Squat / Split Squat'
-    : 'Bodyweight Squat';
-  const hinge = has('dumbbells')
-    ? 'Dumbbell Romanian Deadlift'
-    : 'Hip Hinge Good Morning';
+  const gymMap: Record<ExercisePattern, { key: string; name: string; equipment_type: EquipmentType }> = {
+    squat: { key: 'barbell_back_squat', name: 'Barbell Back Squat', equipment_type: 'barbell' },
+    hinge: { key: 'barbell_romanian_deadlift', name: 'Barbell Romanian Deadlift', equipment_type: 'barbell' },
+    horizontal_push: { key: 'barbell_bench_press', name: 'Barbell Bench Press', equipment_type: 'barbell' },
+    horizontal_pull: { key: 'barbell_row', name: 'Barbell Row', equipment_type: 'barbell' },
+    vertical_pull: { key: 'lat_pulldown', name: 'Lat Pulldown', equipment_type: 'machine' },
+    vertical_push: { key: 'seated_db_shoulder_press', name: 'Seated Dumbbell Shoulder Press', equipment_type: 'dumbbell' },
+    delts_iso: { key: 'db_lateral_raise', name: 'Dumbbell Lateral Raise', equipment_type: 'dumbbell' },
+    abs: { key: 'cable_crunch', name: 'Cable Crunch', equipment_type: 'machine' },
+    biceps: { key: 'ez_bar_curl', name: 'EZ-Bar Curl', equipment_type: 'barbell' },
+    triceps: { key: 'cable_pushdown', name: 'Cable Triceps Pushdown', equipment_type: 'machine' },
+    pull: { key: 'strict_pullup', name: 'Strict Pull-Ups', equipment_type: 'bodyweight' },
+    push: { key: 'ring_dips', name: 'Dips', equipment_type: 'bodyweight' },
+    legs: { key: 'walking_lunge', name: 'Walking Lunges', equipment_type: 'bodyweight' },
+    core: { key: 'hollow_body_hold', name: 'Hollow Body Hold', equipment_type: 'bodyweight' },
+    skill: { key: 'handstand_practice', name: 'Handstand Practice', equipment_type: 'bodyweight' },
+    snatch_tech: { key: 'hang_power_snatch', name: 'Hang Power Snatch', equipment_type: 'barbell' },
+    cleanjerk_tech: { key: 'hang_power_clean', name: 'Hang Power Clean + Push Jerk', equipment_type: 'barbell' },
+    front_squat: { key: 'barbell_front_squat', name: 'Barbell Front Squat', equipment_type: 'barbell' },
+    pulls: { key: 'clean_pull', name: 'Clean Pull', equipment_type: 'barbell' },
+    accessories: { key: 'rear_delt_machine_fly', name: 'Rear Delt Machine Fly', equipment_type: 'machine' },
+    intervals: { key: 'interval_run', name: 'Interval Run', equipment_type: 'running' },
+    tempo: { key: 'tempo_run', name: 'Tempo Run', equipment_type: 'running' },
+    easy: { key: 'easy_run', name: 'Easy Run', equipment_type: 'running' },
+    long: { key: 'long_run', name: 'Long Run', equipment_type: 'running' }
+  };
+
+  const homeMap: Partial<Record<ExercisePattern, { key: string; name: string; equipment_type: EquipmentType }>> = {
+    squat: has('dumbbells')
+      ? { key: 'goblet_squat', name: 'Goblet Squat', equipment_type: 'dumbbell' }
+      : { key: 'bodyweight_squat', name: 'Bodyweight Squat', equipment_type: 'bodyweight' },
+    hinge: has('dumbbells')
+      ? { key: 'db_romanian_deadlift', name: 'Dumbbell Romanian Deadlift', equipment_type: 'dumbbell' }
+      : { key: 'band_good_morning', name: 'Band Good Morning', equipment_type: 'band' },
+    horizontal_push: has('dumbbells')
+      ? { key: 'db_floor_press', name: 'Dumbbell Floor Press', equipment_type: 'dumbbell' }
+      : { key: 'pushup', name: 'Push-Ups', equipment_type: 'bodyweight' },
+    horizontal_pull: has('dumbbells')
+      ? { key: 'single_arm_db_row', name: 'Single-Arm Dumbbell Row', equipment_type: 'dumbbell' }
+      : has('bands')
+        ? { key: 'band_row', name: 'Band Row', equipment_type: 'band' }
+        : { key: 'inverted_row', name: 'Inverted Row', equipment_type: 'bodyweight' },
+    vertical_pull: has('pullup_bar')
+      ? { key: 'pullup', name: 'Pull-Ups', equipment_type: 'bodyweight' }
+      : { key: 'band_lat_pulldown', name: 'Band Lat Pulldown', equipment_type: 'band' },
+    vertical_push: has('dumbbells')
+      ? { key: 'db_shoulder_press', name: 'Dumbbell Shoulder Press', equipment_type: 'dumbbell' }
+      : { key: 'pike_pushup', name: 'Pike Push-Up', equipment_type: 'bodyweight' },
+    delts_iso: has('bands')
+      ? { key: 'band_lateral_raise', name: 'Band Lateral Raise', equipment_type: 'band' }
+      : { key: 'db_lateral_raise', name: 'Dumbbell Lateral Raise', equipment_type: has('dumbbells') ? 'dumbbell' : 'bodyweight' },
+    abs: { key: 'plank', name: 'Plank', equipment_type: 'bodyweight' },
+    biceps: has('bands')
+      ? { key: 'band_curl', name: 'Band Curl', equipment_type: 'band' }
+      : { key: 'db_curl', name: 'Dumbbell Curl', equipment_type: has('dumbbells') ? 'dumbbell' : 'bodyweight' },
+    triceps: has('bands')
+      ? { key: 'band_triceps_extension', name: 'Band Triceps Extension', equipment_type: 'band' }
+      : { key: 'diamond_pushup', name: 'Diamond Push-Ups', equipment_type: 'bodyweight' }
+  };
+
+  if (location === 'home' && homeMap[pattern]) {
+    return homeMap[pattern] as { key: string; name: string; equipment_type: EquipmentType };
+  }
+
+  return gymMap[pattern];
+};
+
+const resolvePattern = (patternDef: PatternDefinition, prefs: UserPrefs): Exercise => {
+  const variant = chooseVariant(patternDef.pattern, prefs.location, prefs.equipment);
+  const targetRange = parseRepRange(patternDef.reps);
 
   return {
-    horizontalPush,
-    verticalPush,
-    horizontalPull,
-    verticalPull,
-    squat,
-    hinge,
-    lateralRaise: has('dumbbells') ? 'Dumbbell Lateral Raise' : has('bands') ? 'Band Lateral Raise' : 'Lateral Raise (Bodyweight Lean)',
-    curls: has('dumbbells') ? 'Dumbbell Curl' : has('bands') ? 'Band Curl' : 'Towel Curl Isometric',
-    triceps: has('dumbbells') ? 'Overhead Dumbbell Triceps Extension' : has('bands') ? 'Band Triceps Extension' : 'Diamond Push-Ups',
-    core: 'Plank / Hollow Hold',
-    lunge: 'Reverse Lunges'
+    exercise_key: variant.key || slugifyExercise(variant.name),
+    exercise_name: variant.name,
+    pattern: patternDef.pattern,
+    equipment_type: variant.equipment_type,
+    sets: patternDef.sets,
+    reps: patternDef.reps,
+    target_reps_min: targetRange.min,
+    target_reps_max: targetRange.max,
+    notes: patternDef.notes
   };
 };
 
-const getRepScheme = (goal: Goal) => {
-  if (goal === 'strength') {
-    return {
-      compoundSets: '4',
-      compoundReps: '3-5',
-      secondarySets: '3',
-      secondaryReps: '5-8',
-      accessorySets: '3',
-      accessoryReps: '10-12',
-      note: 'Repos 2-3 min sur les mouvements principaux.'
-    };
-  }
+const buildPatternDays = (archetype: Archetype, daysPerWeek: number, goal: Goal): Array<{ focus: string; patterns: PatternDefinition[] }> => {
+  const days = Math.min(6, Math.max(2, daysPerWeek));
 
-  if (goal === 'fat_loss' || goal === 'general') {
-    return {
-      compoundSets: '3',
-      compoundReps: '8-12',
-      secondarySets: '3',
-      secondaryReps: '10-12',
-      accessorySets: '3',
-      accessoryReps: '12-15',
-      note: 'Repos courts (60-90 sec), focus technique et dépense énergétique.'
-    };
-  }
-
-  return {
-    compoundSets: '3',
-    compoundReps: '5-8',
-    secondarySets: '3',
-    secondaryReps: '8-10',
-    accessorySets: '3',
-    accessoryReps: '12-15',
-    note: 'Progresse de 1-2 reps avant d’augmenter la charge.'
-  };
-};
-
-const fullBodyDay = (day: string, focus: string, ex: ExerciseLibrary, goal: Goal): PlanDay => {
-  const reps = getRepScheme(goal);
-
-  return {
-    day,
-    focus,
-    exercises: [
-      makeExercise(ex.squat, reps.compoundSets, reps.compoundReps, 'RPE 7-8'),
-      makeExercise(ex.horizontalPush, reps.secondarySets, reps.secondaryReps),
-      makeExercise(ex.horizontalPull, reps.secondarySets, reps.secondaryReps),
-      makeExercise(ex.hinge, reps.secondarySets, reps.secondaryReps),
-      makeExercise(ex.verticalPull, reps.secondarySets, reps.secondaryReps),
-      makeExercise(ex.lateralRaise, reps.accessorySets, reps.accessoryReps),
-      makeExercise(ex.core, '3', '30-45 sec', reps.note)
-    ]
-  };
-};
-
-const upperDay = (day: string, focus: string, ex: ExerciseLibrary, goal: Goal): PlanDay => {
-  const reps = getRepScheme(goal);
-
-  return {
-    day,
-    focus,
-    exercises: [
-      makeExercise(ex.horizontalPush, reps.compoundSets, reps.compoundReps, 'RPE 7-8'),
-      makeExercise(ex.verticalPull, reps.secondarySets, reps.secondaryReps),
-      makeExercise(ex.verticalPush, reps.secondarySets, reps.secondaryReps),
-      makeExercise(ex.horizontalPull, reps.secondarySets, reps.secondaryReps),
-      makeExercise(ex.lateralRaise, reps.accessorySets, reps.accessoryReps),
-      makeExercise(ex.curls, reps.accessorySets, reps.accessoryReps),
-      makeExercise(ex.triceps, reps.accessorySets, reps.accessoryReps)
-    ]
-  };
-};
-
-const lowerDay = (day: string, focus: string, ex: ExerciseLibrary, goal: Goal): PlanDay => {
-  const reps = getRepScheme(goal);
-
-  return {
-    day,
-    focus,
-    exercises: [
-      makeExercise(ex.squat, reps.compoundSets, reps.compoundReps, 'RPE 7-8'),
-      makeExercise(ex.hinge, reps.secondarySets, reps.secondaryReps),
-      makeExercise(ex.lunge, reps.secondarySets, reps.secondaryReps),
-      makeExercise('Leg Press / Step-Up', reps.secondarySets, reps.secondaryReps),
-      makeExercise(ex.core, '3', '30-45 sec', reps.note)
-    ]
-  };
-};
-
-const getSplit = (daysPerWeek: number) => {
-  if (daysPerWeek <= 3) {
-    return 'Full Body';
-  }
-
-  if (daysPerWeek === 4) {
-    return 'Upper / Lower';
-  }
-
-  if (daysPerWeek === 5) {
-    return 'Push / Pull / Legs + Upper + Accessory';
-  }
-
-  return 'Push / Pull / Legs x2';
-};
-
-const makeDays = (prefs: UserPrefs, ex: ExerciseLibrary, goal: Goal): PlanDay[] => {
-  const days = Math.min(6, Math.max(3, prefs.days_per_week));
-
-  if (days <= 3) {
-    return [
-      fullBodyDay(weekdayLabels[0], 'Full Body A', ex, goal),
-      fullBodyDay(weekdayLabels[1], 'Full Body B', ex, goal),
-      fullBodyDay(weekdayLabels[2], 'Full Body A', ex, goal)
+  if (archetype === 'running') {
+    const runningDays: Array<{ focus: string; patterns: PatternDefinition[] }> = [
+      { focus: 'Run Quality', patterns: [{ pattern: 'intervals', sets: '1', reps: '4-8', notes: 'Récup 1:1 sur les fractions' }, { pattern: 'easy', sets: '1', reps: '20-30' }] },
+      { focus: 'Run Tempo', patterns: [{ pattern: 'tempo', sets: '1', reps: '15-25' }] },
+      { focus: 'Run Long', patterns: [{ pattern: 'long', sets: '1', reps: '35-60' }] },
+      { focus: 'Run Easy', patterns: [{ pattern: 'easy', sets: '1', reps: '25-40' }] }
     ];
+    return runningDays.slice(0, Math.min(days, runningDays.length));
   }
 
-  if (days === 4) {
-    return [
-      upperDay(weekdayLabels[0], 'Upper A', ex, goal),
-      lowerDay(weekdayLabels[1], 'Lower A', ex, goal),
-      upperDay(weekdayLabels[2], 'Upper B', ex, goal),
-      lowerDay(weekdayLabels[3], 'Lower B', ex, goal)
+  if (archetype === 'calisthenics') {
+    const cali: Array<{ focus: string; patterns: PatternDefinition[] }> = [
+      { focus: 'Pull + Core', patterns: [{ pattern: 'pull', sets: '4', reps: '4-8' }, { pattern: 'core', sets: '3', reps: '20-40', notes: 'Arrête 1-2 reps avant échec' }, { pattern: 'skill', sets: '3', reps: '20-40' }] },
+      { focus: 'Push + Legs', patterns: [{ pattern: 'push', sets: '4', reps: '5-10' }, { pattern: 'legs', sets: '4', reps: '8-12' }, { pattern: 'core', sets: '3', reps: '20-40' }] },
+      { focus: 'Skill + Full Body', patterns: [{ pattern: 'skill', sets: '4', reps: '15-30' }, { pattern: 'pull', sets: '3', reps: '4-8' }, { pattern: 'push', sets: '3', reps: '6-12' }] }
     ];
+    return Array.from({ length: days }, (_, i) => cali[i % cali.length]);
   }
 
-  if (days === 5) {
-    return [
-      upperDay(weekdayLabels[0], 'Push', ex, goal),
-      upperDay(weekdayLabels[1], 'Pull', ex, goal),
-      lowerDay(weekdayLabels[2], 'Legs', ex, goal),
-      upperDay(weekdayLabels[3], 'Upper Hypertrophy', ex, goal),
-      lowerDay(weekdayLabels[4], 'Accessory + Core', ex, goal)
+  if (archetype === 'weightlifting') {
+    const wl: Array<{ focus: string; patterns: PatternDefinition[] }> = [
+      { focus: 'Snatch Technique', patterns: [{ pattern: 'snatch_tech', sets: '5', reps: '2-3' }, { pattern: 'front_squat', sets: '4', reps: '3-5' }, { pattern: 'accessories', sets: '3', reps: '8-12' }] },
+      { focus: 'Clean & Jerk Technique', patterns: [{ pattern: 'cleanjerk_tech', sets: '5', reps: '2-3' }, { pattern: 'pulls', sets: '4', reps: '3-5' }, { pattern: 'accessories', sets: '3', reps: '8-12' }] },
+      { focus: 'Strength Base', patterns: [{ pattern: 'front_squat', sets: '5', reps: '3-5' }, { pattern: 'vertical_push', sets: '3', reps: '5-8' }, { pattern: 'horizontal_pull', sets: '3', reps: '6-10' }] }
     ];
+    return Array.from({ length: days }, (_, i) => wl[i % wl.length]);
   }
 
-  return [
-    upperDay(weekdayLabels[0], 'Push A', ex, goal),
-    upperDay(weekdayLabels[1], 'Pull A', ex, goal),
-    lowerDay(weekdayLabels[2], 'Legs A', ex, goal),
-    upperDay(weekdayLabels[3], 'Push B', ex, goal),
-    upperDay(weekdayLabels[4], 'Pull B', ex, goal),
-    lowerDay(weekdayLabels[5], 'Legs B', ex, goal)
+  const heavyReps = goal === 'strength' ? '3-5' : '5-8';
+  const hypertrophyTemplate: Array<{ focus: string; patterns: PatternDefinition[] }> = [
+    { focus: 'Upper A', patterns: [{ pattern: 'horizontal_push', sets: '3', reps: heavyReps }, { pattern: 'horizontal_pull', sets: '3', reps: '6-10' }, { pattern: 'vertical_push', sets: '3', reps: '6-10' }, { pattern: 'biceps', sets: '3', reps: '10-15' }, { pattern: 'triceps', sets: '3', reps: '10-15' }] },
+    { focus: 'Lower A', patterns: [{ pattern: 'squat', sets: '3', reps: heavyReps }, { pattern: 'hinge', sets: '3', reps: '6-10' }, { pattern: 'abs', sets: '3', reps: '12-20' }] },
+    { focus: 'Upper B', patterns: [{ pattern: 'vertical_pull', sets: '3', reps: '6-10' }, { pattern: 'horizontal_push', sets: '3', reps: '6-10' }, { pattern: 'horizontal_pull', sets: '3', reps: '6-10' }, { pattern: 'delts_iso', sets: '3', reps: '12-20' }, { pattern: 'triceps', sets: '3', reps: '10-15' }] }
   ];
+
+  return Array.from({ length: days }, (_, i) => hypertrophyTemplate[i % hypertrophyTemplate.length]);
 };
 
 export const generatePlan = (prefs: UserPrefs): GeneratedPlan => {
   const normalizedGoal = normalizeGoal(prefs);
-  const normalizedPrefs: UserPrefs = {
+  const archetype = prefs.archetype ?? mapHeroClassToArchetype(prefs.hero_class);
+
+  const normalizedPrefs: UserPrefs & { archetype: Archetype } = {
     ...prefs,
-    goal: normalizedGoal
+    goal: normalizedGoal,
+    archetype
   };
 
-  const exerciseLibrary = getExerciseLibrary(normalizedPrefs.location, normalizedPrefs.equipment);
-  const split = getSplit(normalizedPrefs.days_per_week);
-  const days = makeDays(normalizedPrefs, exerciseLibrary, normalizedGoal);
+  const patternDays = buildPatternDays(archetype, normalizedPrefs.days_per_week, normalizedGoal);
+  const days = patternDays.map((patternDay, index) => ({
+    day: weekdayLabels[index],
+    focus: patternDay.focus,
+    exercises: patternDay.patterns.map((entry) => resolvePattern(entry, normalizedPrefs))
+  }));
 
   return {
-    title: `Plan ${split} - ${normalizedPrefs.training_level}`,
+    title: `Plan ${archetype} - ${normalizedPrefs.training_level}`,
     meta: normalizedPrefs,
-    split,
+    split: archetype,
     days
   };
 };

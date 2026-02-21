@@ -6,7 +6,9 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 import RestTimer from '@/components/RestTimer';
 import { generatePlan, type EquipmentType, type GeneratedPlan, type Goal, type Location, type TrainingLevel, type UserPrefs } from '@/lib/plan/generatePlan';
-import { getLastPerformance, recommendWeight, type Recommendation, xpToLevel } from '@/lib/progression/recommendWeight';
+import { getLastPerformance, recommendWeight, type ExerciseLogForProgression, type Recommendation, xpToLevel } from '@/lib/progression/recommendWeight';
+import { getCycleWeek, isDeloadWeek, weekStart } from '@/lib/cycle/cycle';
+import { buildNextSessionBlueprint, type SessionBlueprint } from '@/lib/session/nextSession';
 
 type ProfilePrefs = {
   hero_class: string | null;
@@ -22,6 +24,9 @@ type WorkoutPlanRow = {
   title: string;
   meta: UserPrefs;
   plan: GeneratedPlan;
+  cycle_week: number;
+  cycle_start_date: string;
+  cycle_rules: Record<string, unknown>;
 };
 
 type ExerciseLogRow = {
@@ -46,6 +51,12 @@ type SessionSummary = {
   setsCount: number;
   totalVolume: number;
   xpBonus: number;
+};
+
+type WeeklyQuestRow = {
+  completed_sessions: number;
+  target_sessions: number;
+  completed: boolean;
 };
 
 const defaultPrefs: ProfilePrefs = {
@@ -99,6 +110,11 @@ export default function PlanPage() {
   const [exerciseForms, setExerciseForms] = useState<Record<string, ExerciseFormState>>({});
   const [recommendations, setRecommendations] = useState<Record<string, Recommendation>>({});
   const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null);
+  const [activeCycleWeek, setActiveCycleWeek] = useState(1);
+  const [cycleStartDate, setCycleStartDate] = useState<string | null>(null);
+  const [selectedDayIndex, setSelectedDayIndex] = useState(0);
+  const [activeBlueprint, setActiveBlueprint] = useState<SessionBlueprint | null>(null);
+  const [weeklyQuestProgress, setWeeklyQuestProgress] = useState<WeeklyQuestRow | null>(null);
 
   const savePlan = async (userId: string, nextPlan: GeneratedPlan) => {
     setSaving(true);
@@ -123,7 +139,10 @@ export default function PlanPage() {
         is_active: true,
         title: nextPlan.title,
         meta: nextPlan.meta,
-        plan: nextPlan
+        plan: nextPlan,
+        cycle_week: 1,
+        cycle_start_date: new Date().toISOString().slice(0, 10),
+        cycle_rules: { deload_week: 4, progression: 'auto' }
       })
       .select('id')
       .single();
@@ -178,7 +197,7 @@ export default function PlanPage() {
 
       const { data: activePlan, error: activePlanError } = await supabase
         .from('workout_plans')
-        .select('id, title, meta, plan')
+        .select('id, title, meta, plan, cycle_week, cycle_start_date, cycle_rules')
         .eq('user_id', user.id)
         .eq('is_active', true)
         .maybeSingle<WorkoutPlanRow>();
@@ -195,6 +214,8 @@ export default function PlanPage() {
         nextPlan = activePlan.plan;
         setPlan(activePlan.plan);
         setActivePlanId(activePlan.id);
+        setCycleStartDate(activePlan.cycle_start_date);
+        setActiveCycleWeek(getCycleWeek(activePlan.cycle_start_date, new Date()));
       } else {
         const generated = generatePlan({
           hero_class: nextPrefs.hero_class ?? 'Warrior',
@@ -206,6 +227,8 @@ export default function PlanPage() {
         });
         nextPlan = generated;
         setPlan(generated);
+        setCycleStartDate(new Date().toISOString().slice(0, 10));
+        setActiveCycleWeek(1);
         await savePlan(user.id, generated);
       }
 
@@ -263,6 +286,15 @@ export default function PlanPage() {
       }
 
       setRecommendations(recommendationMap);
+      const currentWeekStart = weekStart(new Date()).toISOString().slice(0, 10);
+      const { data: weeklyQuest } = await supabase
+        .from('weekly_quests')
+        .select('completed_sessions, target_sessions, completed')
+        .eq('user_id', user.id)
+        .eq('week_start', currentWeekStart)
+        .maybeSingle<WeeklyQuestRow>();
+
+      setWeeklyQuestProgress(weeklyQuest ?? { completed_sessions: 0, target_sessions: 3, completed: false });
       setLoading(false);
     };
 
@@ -293,11 +325,43 @@ export default function PlanPage() {
     setPlan(nextPlan);
     setSessionId(null);
     setSessionSummary(null);
+    setActiveBlueprint(null);
+    setCycleStartDate(new Date().toISOString().slice(0, 10));
+    setActiveCycleWeek(1);
     await savePlan(user.id, nextPlan);
   };
 
+  const handleAdvanceWeek = async () => {
+    if (!activePlanId || !cycleStartDate) return;
+
+    const {
+      data: { user }
+    } = await supabase.auth.getUser();
+
+    if (!user) return;
+
+    const start = new Date(`${cycleStartDate}T00:00:00`);
+    start.setDate(start.getDate() - 7);
+    const nextStart = start.toISOString().slice(0, 10);
+    const nextWeek = getCycleWeek(nextStart, new Date());
+
+    const { error: updateError } = await supabase
+      .from('workout_plans')
+      .update({ cycle_start_date: nextStart, cycle_week: nextWeek })
+      .eq('id', activePlanId)
+      .eq('user_id', user.id);
+
+    if (updateError) {
+      setError(dbErrorMessage(updateError.message));
+      return;
+    }
+
+    setCycleStartDate(nextStart);
+    setActiveCycleWeek(nextWeek);
+  };
+
   const handleStartSession = async () => {
-    if (!activePlanId || !prefs) {
+    if (!activePlanId || !prefs || !plan) {
       setError('Impossible de démarrer la session: plan actif introuvable.');
       return;
     }
@@ -314,13 +378,46 @@ export default function PlanPage() {
       return;
     }
 
+    const currentCycleWeek = getCycleWeek(cycleStartDate ?? new Date(), new Date());
+    setActiveCycleWeek(currentCycleWeek);
+
+    const dayPlan = plan.days[selectedDayIndex];
+    if (!dayPlan) {
+      setStartingSession(false);
+      setError('Jour de plan introuvable.');
+      return;
+    }
+
+    const logsByExercise: Record<string, ExerciseLogForProgression[]> = {};
+
+    for (const exercise of dayPlan.exercises) {
+      const { data: logs } = await supabase
+        .from('exercise_logs')
+        .select('session_id, weight_kg, reps, rpe, created_at')
+        .eq('user_id', user.id)
+        .eq('exercise_key', exercise.exercise_key)
+        .order('created_at', { ascending: false })
+        .limit(30)
+        .returns<ExerciseLogForProgression[]>();
+
+      logsByExercise[exercise.exercise_key] = logs ?? [];
+    }
+
+    const blueprint = buildNextSessionBlueprint({
+      day: dayPlan,
+      goal: prefs.goal,
+      cycleWeek: currentCycleWeek,
+      logsByExercise
+    });
+
     const { data, error: sessionError } = await supabase
       .from('workout_sessions')
       .insert({
         user_id: user.id,
         plan_id: activePlanId,
         started_at: new Date().toISOString(),
-        location: prefs.location
+        location: prefs.location,
+        blueprint
       })
       .select('id')
       .single();
@@ -333,6 +430,7 @@ export default function PlanPage() {
     }
 
     setSessionSummary(null);
+    setActiveBlueprint(blueprint);
     setSessionId(data.id);
   };
 
@@ -390,22 +488,64 @@ export default function PlanPage() {
       )
     );
 
-    const xpBonus = setsCount >= 6 ? 50 : 0;
+    let xpBonus = setsCount >= 6 ? 50 : 0;
 
-    if (xpBonus > 0) {
-      const { data: userStats } = await supabase.from('user_stats').select('xp').eq('user_id', user.id).maybeSingle<{ xp: number }>();
-      const nextXp = (userStats?.xp ?? 0) + xpBonus;
-      const nextLevel = xpToLevel(nextXp);
-      const { error: upsertError } = await supabase.from('user_stats').upsert({ user_id: user.id, xp: nextXp, level: nextLevel }, { onConflict: 'user_id' });
+    const currentWeekStart = weekStart(new Date()).toISOString().slice(0, 10);
+    const { data: existingQuest } = await supabase
+      .from('weekly_quests')
+      .select('completed_sessions, target_sessions, completed')
+      .eq('user_id', user.id)
+      .eq('week_start', currentWeekStart)
+      .maybeSingle<WeeklyQuestRow>();
 
-      if (upsertError) {
-        setFinishingSession(false);
-        setError(dbErrorMessage(upsertError.message));
-        return;
-      }
+    const previousSessions = existingQuest?.completed_sessions ?? 0;
+    const targetSessions = existingQuest?.target_sessions ?? 3;
+    const updatedCompletedSessions = previousSessions + 1;
+    const questNowCompleted = updatedCompletedSessions >= targetSessions;
+    const shouldGrantQuestXp = questNowCompleted && !(existingQuest?.completed ?? false);
+
+    if (shouldGrantQuestXp) {
+      xpBonus += 200;
     }
 
+    const { data: userStats } = await supabase.from('user_stats').select('xp').eq('user_id', user.id).maybeSingle<{ xp: number }>();
+    const nextXp = (userStats?.xp ?? 0) + xpBonus;
+    const nextLevel = xpToLevel(nextXp);
+
+    const { error: statsUpsertError } = await supabase
+      .from('user_stats')
+      .upsert({ user_id: user.id, xp: nextXp, level: nextLevel }, { onConflict: 'user_id' });
+
+    if (statsUpsertError) {
+      setFinishingSession(false);
+      setError(dbErrorMessage(statsUpsertError.message));
+      return;
+    }
+
+    const { error: questError } = await supabase.from('weekly_quests').upsert(
+      {
+        user_id: user.id,
+        week_start: currentWeekStart,
+        target_sessions: targetSessions,
+        completed_sessions: updatedCompletedSessions,
+        completed: questNowCompleted
+      },
+      { onConflict: 'user_id,week_start' }
+    );
+
+    if (questError) {
+      setFinishingSession(false);
+      setError(dbErrorMessage(questError.message));
+      return;
+    }
+
+    setWeeklyQuestProgress({
+      completed_sessions: updatedCompletedSessions,
+      target_sessions: targetSessions,
+      completed: questNowCompleted
+    });
     setSessionSummary({ durationMinutes, setsCount, totalVolume, xpBonus });
+    setActiveBlueprint(null);
     setSessionId(null);
     setFinishingSession(false);
   };
@@ -423,7 +563,8 @@ export default function PlanPage() {
       return;
     }
 
-    const exercise = plan.days[dayIndex]?.exercises[exerciseIndex];
+    const sourceExercises = activeBlueprint?.exercises ?? plan.days[dayIndex]?.exercises;
+    const exercise = sourceExercises?.[exerciseIndex];
     if (!exercise) return;
 
     const {
@@ -510,6 +651,8 @@ export default function PlanPage() {
     return `Session en cours (${sessionId.slice(0, 8)}...)`;
   }, [sessionId]);
 
+  const cycleLabel = `S${activeCycleWeek}`;
+
   if (loading) return <p className="text-slate-300">Chargement du plan...</p>;
 
   return (
@@ -519,6 +662,11 @@ export default function PlanPage() {
           <h2 className="text-3xl font-semibold">Programme recommandé</h2>
           <p className="text-slate-300">Ton plan hebdomadaire personnalisé selon tes préférences.</p>
           <p className="text-xs text-slate-400">{planDescription}</p>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+            <span className="rounded-full border border-violet-400/30 bg-violet-900/30 px-2 py-1 text-violet-100">Cycle {cycleLabel}</span>
+            {isDeloadWeek(activeCycleWeek) ? <span className="rounded-full border border-amber-400/30 bg-amber-900/30 px-2 py-1 text-amber-100">Deload</span> : null}
+            {weeklyQuestProgress ? <span className="rounded-full border border-cyan-400/30 bg-cyan-900/30 px-2 py-1 text-cyan-100">Quête: {weeklyQuestProgress.completed_sessions}/{weeklyQuestProgress.target_sessions}</span> : null}
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-2">
@@ -531,6 +679,11 @@ export default function PlanPage() {
           <button className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-violet-500 disabled:opacity-60" disabled={saving} onClick={handleRegenerate} type="button">
             {saving ? 'Génération...' : 'Regenerate plan'}
           </button>
+          {process.env.NODE_ENV !== 'production' ? (
+            <button className="rounded-lg bg-amber-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-600" onClick={handleAdvanceWeek} type="button">
+              Advance week
+            </button>
+          ) : null}
           <Link className="rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-sm transition hover:bg-slate-800" href="/dashboard">
             Back to dashboard
           </Link>
@@ -556,23 +709,35 @@ export default function PlanPage() {
             <p className="mt-2 text-slate-300">Split: {plan.split}</p>
           </div>
 
+          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+            <label className="text-sm text-slate-300" htmlFor="day-selector">Jour de session</label>
+            <select className="ml-2 rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm" id="day-selector" onChange={(event) => setSelectedDayIndex(Number(event.target.value))} value={selectedDayIndex}>
+              {plan.days.map((dayPlan, dayIndex) => (
+                <option key={dayPlan.day} value={dayIndex}>
+                  {dayPlan.day} - {dayPlan.focus}
+                </option>
+              ))}
+            </select>
+          </div>
+
           {plan.days.map((dayPlan, dayIndex) => (
-            <article className="rounded-xl border border-slate-800 bg-slate-900/60 p-5" key={dayPlan.day + dayPlan.focus}>
+            <article className={`rounded-xl border border-slate-800 bg-slate-900/60 p-5 ${dayIndex === selectedDayIndex ? '' : 'opacity-60'}`} key={dayPlan.day + dayPlan.focus}>
               <h4 className="text-lg font-semibold">{dayPlan.day} - {dayPlan.focus}</h4>
               <ul className="mt-3 space-y-2 text-sm text-slate-200">
                 {dayPlan.exercises.map((exercise, exerciseIndex) => {
                   const key = makeExerciseKey(dayIndex, exerciseIndex);
                   const form = exerciseForms[key] ?? { weightKg: '', reps: '', rpe: '', restSeconds: null, setIndex: 1 };
+                  const blueprintExercise = dayIndex === selectedDayIndex ? activeBlueprint?.exercises[exerciseIndex] : undefined;
                   const recommendation = recommendations[key];
 
                   return (
                     <li className="rounded-md border border-slate-800 bg-slate-950/50 p-3" key={`${dayPlan.day}-${exercise.exercise_key}-${exerciseIndex}`}>
                       <p className="font-medium">{exercise.exercise_name}</p>
-                      <p className="text-slate-400">{exercise.sets} x {exercise.reps}</p>
+                      <p className="text-slate-400">{blueprintExercise?.sets ?? exercise.sets} x {exercise.reps}</p>
                       <p className="text-xs text-slate-500">equipment: {exercise.equipment_type} · key: {exercise.exercise_key}</p>
-                      <p className="text-xs text-emerald-300">Recommended reps: {recommendation?.recommendedReps ?? `${exercise.target_reps_min}-${exercise.target_reps_max}`}</p>
-                      <p className="text-xs text-emerald-300">Recommended weight: {recommendation?.recommendedWeight === null || recommendation?.recommendedWeight === undefined ? 'N/A' : `${recommendation.recommendedWeight} kg`}</p>
-                      {recommendation?.progressionNote ? <p className="text-xs text-cyan-200">{recommendation.progressionNote}</p> : null}
+                      <p className="text-xs text-emerald-300">Recommended reps: {blueprintExercise?.recommended_reps ?? recommendation?.recommendedReps ?? `${exercise.target_reps_min}-${exercise.target_reps_max}`}</p>
+                      <p className="text-xs text-emerald-300">Recommended weight: {(blueprintExercise?.recommended_weight ?? recommendation?.recommendedWeight) === null || (blueprintExercise?.recommended_weight ?? recommendation?.recommendedWeight) === undefined ? 'N/A' : `${blueprintExercise?.recommended_weight ?? recommendation?.recommendedWeight} kg`}</p>
+                      {(blueprintExercise?.progression_note ?? recommendation?.progressionNote) ? <p className="text-xs text-cyan-200">{blueprintExercise?.progression_note ?? recommendation?.progressionNote}</p> : null}
                       {exercise.notes ? <p className="text-xs text-slate-400">{exercise.notes}</p> : null}
 
                       <div className="mt-3 grid gap-2 md:grid-cols-4">

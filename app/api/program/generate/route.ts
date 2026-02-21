@@ -149,9 +149,57 @@ export async function POST(request: Request) {
   if (!openAiKey) return NextResponse.json({ error: 'OPENAI_API_KEY manquant', build_tag: BUILD_TAG }, { status: 500 });
   if (!supabaseUrl || !supabaseAnonKey) return NextResponse.json({ error: 'Configuration Supabase manquante', build_tag: BUILD_TAG }, { status: 500 });
 
+  let diag: { build_tag: string; input_types: Array<{ role: string; types: string[] }> } = {
+    build_tag: BUILD_TAG,
+    input_types: []
+  };
+
   try {
     const payload = await request.json();
     const input = validateInput(payload);
+
+    const inputMessages = [
+      {
+        role: 'developer',
+        content: [
+          {
+            type: 'input_text',
+            text:
+              'Tu es un coach sportif expert. Réponds en JSON STRICT uniquement (aucun markdown, aucun texte hors JSON). Programme réaliste, periodisé et adapté au profil. Respecte impérativement: weekPlans.length==weeks, chaque semaine contient exactement sessionsPerWeek sessions, 4..8 exercices par session, restSec 30..240. En cas de blessure/douleur, éviter les mouvements à risque et proposer alternatives. Ajoute des safetyNotes sans avis médical.'
+          }
+        ]
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'input_text',
+            text: `Profil utilisateur:\n${JSON.stringify(input, null, 2)}`
+          }
+        ]
+      }
+    ];
+
+    diag = {
+      build_tag: BUILD_TAG,
+      input_types: inputMessages.map((m) => ({
+        role: m.role,
+        types: Array.isArray(m.content) ? m.content.map((c) => (c as any)?.type) : ['(non-array-content)']
+      }))
+    };
+
+    const hasInvalidTypes = diag.input_types.some((m) => m.types.some((type) => type === 'text' || type === '(non-array-content)'));
+    if (hasInvalidTypes) {
+      return Response.json(
+        {
+          ok: false,
+          reason: 'preflight_invalid_content_type',
+          message: `[${BUILD_TAG}] preflight_invalid_content_type ${JSON.stringify(diag)}`,
+          ...diag
+        },
+        { status: 500 }
+      );
+    }
 
     const aiResponse = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
@@ -161,27 +209,7 @@ export async function POST(request: Request) {
       },
       body: JSON.stringify({
         model: 'gpt-4.1-mini',
-        input: [
-          {
-            role: 'developer',
-            content: [
-              {
-                type: 'input_text',
-                text:
-                  'Tu es un coach sportif expert. Réponds en JSON STRICT uniquement (aucun markdown, aucun texte hors JSON). Programme réaliste, periodisé et adapté au profil. Respecte impérativement: weekPlans.length==weeks, chaque semaine contient exactement sessionsPerWeek sessions, 4..8 exercices par session, restSec 30..240. En cas de blessure/douleur, éviter les mouvements à risque et proposer alternatives. Ajoute des safetyNotes sans avis médical.'
-              }
-            ]
-          },
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'input_text',
-                text: `Profil utilisateur:\n${JSON.stringify(input, null, 2)}`
-              }
-            ]
-          }
-        ]
+        input: inputMessages
       })
     });
 
@@ -227,7 +255,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, planId: data.id, plan });
   } catch (error) {
     return NextResponse.json(
-      { error: 'Échec de génération du programme', details: error instanceof Error ? error.message : 'Erreur inconnue', build_tag: BUILD_TAG },
+      {
+        error: 'Échec de génération du programme',
+        message: `[${BUILD_TAG}] ${error instanceof Error ? error.message : 'Erreur inconnue'}`,
+        details: error instanceof Error ? error.message : 'Erreur inconnue',
+        ...diag
+      },
       { status: 500 }
     );
   }

@@ -2,7 +2,7 @@ create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   email text,
   hero_name text,
-  hero_class text check (hero_class in ('Warrior', 'Mage', 'Rogue')),
+  hero_class text check (hero_class in ('Warrior', 'Mage', 'Rogue', 'Ninja', 'Titan', 'Ranger', 'Runner')),
   level int not null default 1,
   training_level text not null default 'beginner' check (training_level in ('beginner', 'intermediate', 'advanced')),
   goal text not null default 'muscle' check (goal in ('muscle', 'strength', 'fat_loss', 'general')),
@@ -18,7 +18,29 @@ alter table public.profiles
   add column if not exists goal text not null default 'muscle' check (goal in ('muscle', 'strength', 'fat_loss', 'general')),
   add column if not exists location text not null default 'gym' check (location in ('gym', 'home')),
   add column if not exists days_per_week int not null default 3 check (days_per_week between 2 and 6),
-  add column if not exists equipment text[] not null default '{}'::text[];
+  add column if not exists equipment text[] not null default '{}'::text[],
+  add column if not exists archetype text not null default 'hypertrophy',
+  add column if not exists baseline jsonb not null default '{}'::jsonb;
+
+
+do $$
+begin
+  if exists (
+    select 1
+    from pg_constraint
+    where conname = 'profiles_hero_class_check'
+      and conrelid = 'public.profiles'::regclass
+  ) then
+    alter table public.profiles drop constraint profiles_hero_class_check;
+  end if;
+
+  alter table public.profiles
+    add constraint profiles_hero_class_check
+    check (hero_class in ('Warrior', 'Mage', 'Rogue', 'Ninja', 'Titan', 'Ranger', 'Runner'));
+exception
+  when duplicate_object then null;
+end;
+$$;
 
 create table if not exists public.workout_plans (
   id uuid primary key default gen_random_uuid(),

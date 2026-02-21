@@ -25,7 +25,7 @@ type RecommendParams = {
   lastWeight: number | null;
   lastReps: number | null;
   lastRpe: number | null;
-  equipment?: 'barbell' | 'dumbbell' | 'machine' | 'bodyweight' | 'band' | 'unknown';
+  equipment?: 'barbell' | 'dumbbell' | 'machine' | 'bodyweight' | 'band' | 'running' | 'unknown';
   failedBelowTargetMinTwice?: boolean;
   targetMaxHitTwiceRecently?: boolean;
 };
@@ -135,7 +135,7 @@ export const recommendWeight = ({
 }: RecommendParams): Recommendation => {
   const recommendedReps = `${targetRepsRange.min}-${targetRepsRange.max}`;
 
-  if (equipment === 'bodyweight') {
+  if (equipment === 'bodyweight' || equipment === 'running') {
     if (lastReps !== null && lastReps >= targetRepsRange.max) {
       return {
         recommendedWeight: null,

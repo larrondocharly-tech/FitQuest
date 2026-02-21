@@ -3,10 +3,26 @@
 import { FormEvent, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
+import { mapHeroClassToArchetype, type Archetype } from '@/lib/plan/generatePlan';
 
 type TrainingLevel = 'beginner' | 'intermediate' | 'advanced';
 type Goal = 'muscle' | 'strength' | 'fat_loss' | 'general';
 type Location = 'gym' | 'home';
+
+type BaselineValues = {
+  bench_press_5rm_kg: string;
+  squat_5rm_kg: string;
+  row_8rm_kg: string;
+  pullups_max: string;
+  dips_max: string;
+  pushups_max: string;
+  front_squat_3rm_kg: string;
+  power_clean_3rm_kg: string;
+  strict_press_5rm_kg: string;
+  cooper_m: string;
+  fivek_time_sec: string;
+  easy_pace_sec_per_km: string;
+};
 
 const equipmentOptions = [
   { label: 'Dumbbells', value: 'dumbbells' },
@@ -15,6 +31,26 @@ const equipmentOptions = [
   { label: 'Bands', value: 'bands' },
   { label: 'None', value: 'none' }
 ];
+
+const emptyBaseline: BaselineValues = {
+  bench_press_5rm_kg: '',
+  squat_5rm_kg: '',
+  row_8rm_kg: '',
+  pullups_max: '',
+  dips_max: '',
+  pushups_max: '',
+  front_squat_3rm_kg: '',
+  power_clean_3rm_kg: '',
+  strict_press_5rm_kg: '',
+  cooper_m: '',
+  fivek_time_sec: '',
+  easy_pace_sec_per_km: ''
+};
+
+const numberOrNull = (value: string): number | null => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+};
 
 export default function OnboardingPage() {
   const router = useRouter();
@@ -25,8 +61,11 @@ export default function OnboardingPage() {
   const [location, setLocation] = useState<Location>('gym');
   const [daysPerWeek, setDaysPerWeek] = useState(3);
   const [equipment, setEquipment] = useState<string[]>([]);
+  const [baseline, setBaseline] = useState<BaselineValues>(emptyBaseline);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  const archetype: Archetype = useMemo(() => mapHeroClassToArchetype(heroClass), [heroClass]);
 
   const effectiveGoal = useMemo(() => {
     if (goal) {
@@ -35,6 +74,38 @@ export default function OnboardingPage() {
 
     return heroClass === 'Warrior' ? 'muscle' : 'general';
   }, [goal, heroClass]);
+
+  const baselinePayload = useMemo(() => {
+    if (archetype === 'calisthenics') {
+      return {
+        pullups_max: numberOrNull(baseline.pullups_max),
+        dips_max: numberOrNull(baseline.dips_max),
+        pushups_max: numberOrNull(baseline.pushups_max)
+      };
+    }
+
+    if (archetype === 'weightlifting') {
+      return {
+        front_squat_3rm_kg: numberOrNull(baseline.front_squat_3rm_kg),
+        power_clean_3rm_kg: numberOrNull(baseline.power_clean_3rm_kg),
+        strict_press_5rm_kg: numberOrNull(baseline.strict_press_5rm_kg)
+      };
+    }
+
+    if (archetype === 'running') {
+      return {
+        cooper_m: numberOrNull(baseline.cooper_m),
+        fivek_time_sec: numberOrNull(baseline.fivek_time_sec),
+        easy_pace_sec_per_km: numberOrNull(baseline.easy_pace_sec_per_km)
+      };
+    }
+
+    return {
+      bench_press_5rm_kg: numberOrNull(baseline.bench_press_5rm_kg),
+      squat_5rm_kg: numberOrNull(baseline.squat_5rm_kg),
+      row_8rm_kg: numberOrNull(baseline.row_8rm_kg)
+    };
+  }, [archetype, baseline]);
 
   const handleEquipmentChange = (item: string, checked: boolean) => {
     if (item === 'none' && checked) {
@@ -73,6 +144,8 @@ export default function OnboardingPage() {
       email: user.email,
       hero_name: heroName,
       hero_class: heroClass,
+      archetype,
+      baseline: baselinePayload,
       training_level: trainingLevel,
       goal: effectiveGoal,
       location,
@@ -113,19 +186,18 @@ export default function OnboardingPage() {
           <select
             id="hero_class"
             className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 outline-none ring-violet-500 focus:ring"
-            onChange={(e) => {
-              const nextClass = e.target.value;
-              setHeroClass(nextClass);
-              if (nextClass === 'Warrior' && goal === 'general') {
-                setGoal('muscle');
-              }
-            }}
+            onChange={(e) => setHeroClass(e.target.value)}
             value={heroClass}
           >
             <option value="Warrior">Warrior</option>
+            <option value="Ninja">Ninja</option>
+            <option value="Titan">Titan</option>
+            <option value="Ranger">Ranger</option>
+            <option value="Runner">Runner</option>
             <option value="Mage">Mage</option>
             <option value="Rogue">Rogue</option>
           </select>
+          <p className="mt-1 text-xs text-slate-400">Archetype détecté: {archetype}</p>
         </div>
 
         <div>
@@ -203,6 +275,41 @@ export default function OnboardingPage() {
             </div>
           </div>
         ) : null}
+
+        <div className="rounded-lg border border-slate-700 bg-slate-950/40 p-3">
+          <p className="mb-2 text-sm font-medium text-slate-200">Baseline ({archetype})</p>
+          <div className="grid gap-2">
+            {archetype === 'hypertrophy' ? (
+              <>
+                <input className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm" placeholder="Bench press 5RM (kg)" type="number" value={baseline.bench_press_5rm_kg} onChange={(e) => setBaseline((prev) => ({ ...prev, bench_press_5rm_kg: e.target.value }))} />
+                <input className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm" placeholder="Squat 5RM (kg)" type="number" value={baseline.squat_5rm_kg} onChange={(e) => setBaseline((prev) => ({ ...prev, squat_5rm_kg: e.target.value }))} />
+                <input className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm" placeholder="Row 8RM (kg)" type="number" value={baseline.row_8rm_kg} onChange={(e) => setBaseline((prev) => ({ ...prev, row_8rm_kg: e.target.value }))} />
+              </>
+            ) : null}
+            {archetype === 'calisthenics' ? (
+              <>
+                <input className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm" placeholder="Pull-ups max" type="number" value={baseline.pullups_max} onChange={(e) => setBaseline((prev) => ({ ...prev, pullups_max: e.target.value }))} />
+                <input className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm" placeholder="Dips max" type="number" value={baseline.dips_max} onChange={(e) => setBaseline((prev) => ({ ...prev, dips_max: e.target.value }))} />
+                <input className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm" placeholder="Push-ups max" type="number" value={baseline.pushups_max} onChange={(e) => setBaseline((prev) => ({ ...prev, pushups_max: e.target.value }))} />
+              </>
+            ) : null}
+            {archetype === 'weightlifting' ? (
+              <>
+                <input className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm" placeholder="Front squat 3RM (kg)" type="number" value={baseline.front_squat_3rm_kg} onChange={(e) => setBaseline((prev) => ({ ...prev, front_squat_3rm_kg: e.target.value }))} />
+                <input className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm" placeholder="Power clean 3RM (kg)" type="number" value={baseline.power_clean_3rm_kg} onChange={(e) => setBaseline((prev) => ({ ...prev, power_clean_3rm_kg: e.target.value }))} />
+                <input className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm" placeholder="Strict press 5RM (kg)" type="number" value={baseline.strict_press_5rm_kg} onChange={(e) => setBaseline((prev) => ({ ...prev, strict_press_5rm_kg: e.target.value }))} />
+              </>
+            ) : null}
+            {archetype === 'running' ? (
+              <>
+                <input className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm" placeholder="Cooper 12-min distance (m)" type="number" value={baseline.cooper_m} onChange={(e) => setBaseline((prev) => ({ ...prev, cooper_m: e.target.value }))} />
+                <input className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm" placeholder="5k time (sec)" type="number" value={baseline.fivek_time_sec} onChange={(e) => setBaseline((prev) => ({ ...prev, fivek_time_sec: e.target.value }))} />
+                <input className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm" placeholder="Easy pace (sec/km)" type="number" value={baseline.easy_pace_sec_per_km} onChange={(e) => setBaseline((prev) => ({ ...prev, easy_pace_sec_per_km: e.target.value }))} />
+              </>
+            ) : null}
+          </div>
+          <p className="mt-2 text-xs text-slate-400">Tous les champs baseline sont optionnels.</p>
+        </div>
 
         {error ? <p className="rounded-md border border-red-500/30 bg-red-900/20 p-2 text-sm text-red-200">{error}</p> : null}
 

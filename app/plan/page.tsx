@@ -9,6 +9,7 @@ import { generatePlan, type EquipmentType, type GeneratedPlan, type Goal, type L
 import { getLastPerformance, recommendWeight, type ExerciseLogForProgression, type Recommendation, xpToLevel } from '@/lib/progression/recommendWeight';
 import { getCycleWeek, isDeloadWeek, weekStart } from '@/lib/cycle/cycle';
 import { buildNextSessionBlueprint, type SessionBlueprint } from '@/lib/session/nextSession';
+import { ensureWeekSchedule, type ScheduledWorkoutRow } from '@/lib/schedule/scheduler';
 
 type ProfilePrefs = {
   hero_class: string | null;
@@ -59,6 +60,15 @@ type WeeklyQuestRow = {
   completed: boolean;
 };
 
+type UserStatsRow = {
+  xp: number;
+  level: number;
+  streak_current: number;
+  streak_best: number;
+  last_workout_date: string | null;
+  streak_milestones: number[] | null;
+};
+
 const defaultPrefs: ProfilePrefs = {
   hero_class: 'Warrior',
   training_level: 'beginner',
@@ -94,6 +104,19 @@ const makeExerciseKey = (dayIndex: number, exerciseIndex: number): string => `${
 
 const weightedEquipment = new Set<EquipmentType>(['barbell', 'dumbbell', 'machine']);
 
+const formatDate = (date: Date): string => {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const addDays = (date: Date, days: number): Date => {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+};
+
 export default function PlanPage() {
   const router = useRouter();
   const [prefs, setPrefs] = useState<ProfilePrefs | null>(null);
@@ -115,8 +138,10 @@ export default function PlanPage() {
   const [selectedDayIndex, setSelectedDayIndex] = useState(0);
   const [activeBlueprint, setActiveBlueprint] = useState<SessionBlueprint | null>(null);
   const [weeklyQuestProgress, setWeeklyQuestProgress] = useState<WeeklyQuestRow | null>(null);
+  const [scheduledWorkouts, setScheduledWorkouts] = useState<ScheduledWorkoutRow[]>([]);
+  const [activeScheduledWorkoutId, setActiveScheduledWorkoutId] = useState<string | null>(null);
 
-  const savePlan = async (userId: string, nextPlan: GeneratedPlan) => {
+  const savePlan = async (userId: string, nextPlan: GeneratedPlan): Promise<string | null> => {
     setSaving(true);
     setError(null);
 
@@ -129,7 +154,7 @@ export default function PlanPage() {
     if (deactivateError) {
       setSaving(false);
       setError(dbErrorMessage(deactivateError.message));
-      return;
+      return null;
     }
 
     const { data, error: insertError } = await supabase
@@ -151,10 +176,11 @@ export default function PlanPage() {
 
     if (insertError) {
       setError(dbErrorMessage(insertError.message));
-      return;
+      return null;
     }
 
     setActivePlanId(data.id);
+    return data.id;
   };
 
   useEffect(() => {
@@ -209,6 +235,7 @@ export default function PlanPage() {
       }
 
       let nextPlan: GeneratedPlan;
+      let currentPlanId: string | null = activePlan?.id ?? null;
 
       if (activePlan?.plan) {
         nextPlan = activePlan.plan;
@@ -229,7 +256,11 @@ export default function PlanPage() {
         setPlan(generated);
         setCycleStartDate(new Date().toISOString().slice(0, 10));
         setActiveCycleWeek(1);
-        await savePlan(user.id, generated);
+        const createdPlanId = await savePlan(user.id, generated);
+        if (createdPlanId) {
+          setActivePlanId(createdPlanId);
+          currentPlanId = createdPlanId;
+        }
       }
 
       const recommendationMap: Record<string, Recommendation> = {};
@@ -295,6 +326,17 @@ export default function PlanPage() {
         .maybeSingle<WeeklyQuestRow>();
 
       setWeeklyQuestProgress(weeklyQuest ?? { completed_sessions: 0, target_sessions: 3, completed: false });
+
+      if (currentPlanId) {
+        try {
+          const schedule = await ensureWeekSchedule(user.id, nextPlan, currentPlanId);
+          setScheduledWorkouts(schedule);
+        } catch (scheduleError) {
+          const message = scheduleError instanceof Error ? scheduleError.message : 'Impossible de créer le planning hebdomadaire.';
+          setError(dbErrorMessage(message));
+        }
+      }
+
       setLoading(false);
     };
 
@@ -328,7 +370,18 @@ export default function PlanPage() {
     setActiveBlueprint(null);
     setCycleStartDate(new Date().toISOString().slice(0, 10));
     setActiveCycleWeek(1);
-    await savePlan(user.id, nextPlan);
+    const createdPlanId = await savePlan(user.id, nextPlan);
+    const schedulePlanId = createdPlanId ?? activePlanId;
+
+    if (schedulePlanId) {
+      try {
+        const schedule = await ensureWeekSchedule(user.id, nextPlan, schedulePlanId);
+        setScheduledWorkouts(schedule);
+      } catch (scheduleError) {
+        const message = scheduleError instanceof Error ? scheduleError.message : 'Impossible de mettre à jour le planning.';
+        setError(dbErrorMessage(message));
+      }
+    }
   };
 
   const handleAdvanceWeek = async () => {
@@ -381,7 +434,16 @@ export default function PlanPage() {
     const currentCycleWeek = getCycleWeek(cycleStartDate ?? new Date(), new Date());
     setActiveCycleWeek(currentCycleWeek);
 
-    const dayPlan = plan.days[selectedDayIndex];
+    const today = formatDate(new Date());
+    const scheduleForToday = scheduledWorkouts.find((item) => item.workout_date === today && item.status !== 'skipped') ?? null;
+    const fallbackPlanned = [...scheduledWorkouts]
+      .filter((item) => item.status === 'planned')
+      .sort((a, b) => a.workout_date.localeCompare(b.workout_date))[0] ?? null;
+    const targetSchedule = scheduleForToday ?? fallbackPlanned;
+    const nextDayIndex = targetSchedule?.day_index ?? selectedDayIndex;
+    setSelectedDayIndex(nextDayIndex);
+
+    const dayPlan = plan.days[nextDayIndex];
     if (!dayPlan) {
       setStartingSession(false);
       setError('Jour de plan introuvable.');
@@ -432,6 +494,7 @@ export default function PlanPage() {
     setSessionSummary(null);
     setActiveBlueprint(blueprint);
     setSessionId(data.id);
+    setActiveScheduledWorkoutId(targetSchedule?.id ?? null);
   };
 
   const handleFinishWorkout = async () => {
@@ -508,13 +571,48 @@ export default function PlanPage() {
       xpBonus += 200;
     }
 
-    const { data: userStats } = await supabase.from('user_stats').select('xp').eq('user_id', user.id).maybeSingle<{ xp: number }>();
+    const { data: userStats, error: statsFetchError } = await supabase
+      .from('user_stats')
+      .select('xp, level, streak_current, streak_best, last_workout_date, streak_milestones')
+      .eq('user_id', user.id)
+      .maybeSingle<UserStatsRow>();
+
+    if (statsFetchError) {
+      setFinishingSession(false);
+      setError(dbErrorMessage(statsFetchError.message));
+      return;
+    }
+
+    const today = formatDate(new Date());
+    const yesterday = formatDate(addDays(new Date(), -1));
+    const prevStreak = userStats?.streak_current ?? 0;
+    const previousWorkoutDate = userStats?.last_workout_date;
+    const nextStreak = previousWorkoutDate === yesterday ? prevStreak + 1 : 1;
+    const nextBest = Math.max(userStats?.streak_best ?? 0, nextStreak);
+    const reachedMilestones = new Set<number>((userStats?.streak_milestones ?? []).map(Number));
+    const streakMilestones = [3, 7, 14];
+    const streakXpBonus = streakMilestones.includes(nextStreak) && !reachedMilestones.has(nextStreak) ? 100 : 0;
+
+    if (streakXpBonus > 0) {
+      reachedMilestones.add(nextStreak);
+      xpBonus += streakXpBonus;
+    }
+
     const nextXp = (userStats?.xp ?? 0) + xpBonus;
     const nextLevel = xpToLevel(nextXp);
 
-    const { error: statsUpsertError } = await supabase
-      .from('user_stats')
-      .upsert({ user_id: user.id, xp: nextXp, level: nextLevel }, { onConflict: 'user_id' });
+    const { error: statsUpsertError } = await supabase.from('user_stats').upsert(
+      {
+        user_id: user.id,
+        xp: nextXp,
+        level: nextLevel,
+        streak_current: nextStreak,
+        streak_best: nextBest,
+        last_workout_date: today,
+        streak_milestones: Array.from(reachedMilestones.values())
+      },
+      { onConflict: 'user_id' }
+    );
 
     if (statsUpsertError) {
       setFinishingSession(false);
@@ -539,6 +637,28 @@ export default function PlanPage() {
       return;
     }
 
+    if (activeScheduledWorkoutId) {
+      const { error: scheduleUpdateError } = await supabase
+        .from('scheduled_workouts')
+        .update({ status: 'done', session_id: sessionId })
+        .eq('id', activeScheduledWorkoutId)
+        .eq('user_id', user.id);
+
+      if (scheduleUpdateError) {
+        setFinishingSession(false);
+        setError(dbErrorMessage(scheduleUpdateError.message));
+        return;
+      }
+    }
+
+    try {
+      const refreshedSchedule = plan && activePlanId ? await ensureWeekSchedule(user.id, plan, activePlanId) : [];
+      setScheduledWorkouts(refreshedSchedule);
+    } catch (scheduleError) {
+      const message = scheduleError instanceof Error ? scheduleError.message : 'Impossible d’actualiser le planning.';
+      setError(dbErrorMessage(message));
+    }
+
     setWeeklyQuestProgress({
       completed_sessions: updatedCompletedSessions,
       target_sessions: targetSessions,
@@ -547,6 +667,7 @@ export default function PlanPage() {
     setSessionSummary({ durationMinutes, setsCount, totalVolume, xpBonus });
     setActiveBlueprint(null);
     setSessionId(null);
+    setActiveScheduledWorkoutId(null);
     setFinishingSession(false);
   };
 
@@ -652,6 +773,17 @@ export default function PlanPage() {
   }, [sessionId]);
 
   const cycleLabel = `S${activeCycleWeek}`;
+  const todayDate = formatDate(new Date());
+  const sortedSchedule = [...scheduledWorkouts].sort((a, b) => a.workout_date.localeCompare(b.workout_date));
+  const todaysWorkout = sortedSchedule.find((item) => item.workout_date === todayDate) ?? null;
+  const nextPlannedWorkout = sortedSchedule.find((item) => item.status === 'planned' && item.workout_date >= todayDate) ?? null;
+  const workoutOfDayLabel = todaysWorkout?.status === 'done'
+    ? 'Completed'
+    : todaysWorkout?.status === 'planned'
+      ? "Start today's workout"
+      : nextPlannedWorkout
+        ? `Next workout: ${new Date(`${nextPlannedWorkout.workout_date}T00:00:00`).toLocaleDateString()}`
+        : 'No workout scheduled this week';
 
   if (loading) return <p className="text-slate-300">Chargement du plan...</p>;
 
@@ -687,6 +819,21 @@ export default function PlanPage() {
           <Link className="rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-sm transition hover:bg-slate-800" href="/dashboard">
             Back to dashboard
           </Link>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-emerald-500/30 bg-emerald-900/10 p-4">
+        <h3 className="text-lg font-semibold text-emerald-200">Workout of the day</h3>
+        <p className="mt-1 text-sm text-slate-200">{workoutOfDayLabel}</p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-60"
+            disabled={startingSession || Boolean(sessionId) || todaysWorkout?.status === 'done' || (!todaysWorkout && !nextPlannedWorkout)}
+            onClick={handleStartSession}
+            type="button"
+          >
+            {todaysWorkout?.status === 'done' ? 'Completed' : startingSession ? 'Starting...' : "Start today's workout"}
+          </button>
         </div>
       </div>
 

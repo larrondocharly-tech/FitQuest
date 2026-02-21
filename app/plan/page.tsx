@@ -593,6 +593,7 @@ export default function PlanPage() {
       session_id: sessionId,
       plan_id: activePlanId,
       day_index: safeDayIndex,
+      exercise_index: focusedExercise.originalIndex + 1,
       exercise_key: focusedExercise.exercise_key,
       exercise_name: safeExerciseName,
       equipment_type: focusedExercise.equipment_type,

@@ -164,7 +164,7 @@ export async function POST(request: Request) {
             role: 'developer',
             content: [
               {
-                type: 'text',
+                type: 'input_text',
                 text:
                   'Tu es un coach sportif expert. Réponds en JSON STRICT uniquement (aucun markdown, aucun texte hors JSON). Programme réaliste, periodisé et adapté au profil. Respecte impérativement: weekPlans.length==weeks, chaque semaine contient exactement sessionsPerWeek sessions, 4..8 exercices par session, restSec 30..240. En cas de blessure/douleur, éviter les mouvements à risque et proposer alternatives. Ajoute des safetyNotes sans avis médical.'
               }
@@ -172,7 +172,7 @@ export async function POST(request: Request) {
           },
           {
             role: 'user',
-            content: [{ type: 'text', text: `Profil utilisateur:\n${JSON.stringify(input, null, 2)}` }]
+            content: [{ type: 'input_text', text: `Profil utilisateur:\n${JSON.stringify(input, null, 2)}` }]
           }
         ]
       })

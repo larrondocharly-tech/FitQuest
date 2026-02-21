@@ -141,6 +141,8 @@ create table if not exists public.exercise_logs (
   day_index int not null,
   exercise_index int not null,
   exercise_name text not null,
+  exercise_key text,
+  equipment_type text,
   set_index int not null,
   target_reps_min int,
   target_reps_max int,
@@ -158,11 +160,24 @@ create table if not exists public.user_stats (
   updated_at timestamptz not null default now()
 );
 
-create index if not exists exercise_logs_user_exercise_created_idx
-  on public.exercise_logs (user_id, exercise_name, created_at desc);
+alter table public.exercise_logs add column if not exists exercise_key text;
+alter table public.exercise_logs add column if not exists equipment_type text;
 
-create index if not exists exercise_logs_user_plan_day_exercise_created_idx
-  on public.exercise_logs (user_id, plan_id, day_index, exercise_name, created_at desc);
+update public.exercise_logs
+set exercise_key = lower(regexp_replace(exercise_name, '[^a-z0-9]+', '_', 'g'))
+where exercise_key is null and exercise_name is not null;
+
+drop index if exists exercise_logs_user_exercise_created_idx;
+drop index if exists exercise_logs_user_plan_day_exercise_created_idx;
+
+create index if not exists exercise_logs_user_exercise_key_created_idx
+  on public.exercise_logs (user_id, exercise_key, created_at desc);
+
+create index if not exists exercise_logs_user_plan_day_exercise_key_created_idx
+  on public.exercise_logs (user_id, plan_id, day_index, exercise_key, created_at desc);
+
+create index if not exists exercise_logs_user_exercise_name_created_idx
+  on public.exercise_logs (user_id, exercise_name, created_at desc);
 
 alter table public.workout_sessions enable row level security;
 alter table public.exercise_logs enable row level security;

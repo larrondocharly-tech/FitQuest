@@ -5,8 +5,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 import RestTimer from '@/components/RestTimer';
-import { generatePlan, type GeneratedPlan, type Goal, type Location, type TrainingLevel, type UserPrefs } from '@/lib/plan/generatePlan';
-import { getLastPerformance, recommendWeight, xpToLevel } from '@/lib/progression/recommendWeight';
+import { generatePlan, type EquipmentType, type GeneratedPlan, type Goal, type Location, type TrainingLevel, type UserPrefs } from '@/lib/plan/generatePlan';
+import { getLastPerformance, recommendWeight, type Recommendation, xpToLevel } from '@/lib/progression/recommendWeight';
 
 type ProfilePrefs = {
   hero_class: string | null;
@@ -30,6 +30,7 @@ type ExerciseLogRow = {
   reps: number;
   rpe: number | null;
   created_at: string;
+  exercise_key: string | null;
 };
 
 type ExerciseFormState = {
@@ -38,6 +39,13 @@ type ExerciseFormState = {
   rpe: string;
   restSeconds: number | null;
   setIndex: number;
+};
+
+type SessionSummary = {
+  durationMinutes: number;
+  setsCount: number;
+  totalVolume: number;
+  xpBonus: number;
 };
 
 const defaultPrefs: ProfilePrefs = {
@@ -71,20 +79,9 @@ const parseRepRange = (reps: string): { min: number; max: number } | null => {
   return { min: Number(numbers[0]), max: Number(numbers[1]) };
 };
 
-const inferEquipment = (exerciseName: string): 'barbell' | 'dumbbell' | 'unknown' => {
-  const lower = exerciseName.toLowerCase();
-  if (lower.includes('dumbbell')) {
-    return 'dumbbell';
-  }
-
-  if (lower.includes('barbell') || lower.includes('ez-bar')) {
-    return 'barbell';
-  }
-
-  return 'unknown';
-};
-
 const makeExerciseKey = (dayIndex: number, exerciseIndex: number): string => `${dayIndex}-${exerciseIndex}`;
+
+const weightedEquipment = new Set<EquipmentType>(['barbell', 'dumbbell', 'machine']);
 
 export default function PlanPage() {
   const router = useRouter();
@@ -93,12 +90,15 @@ export default function PlanPage() {
   const [activePlanId, setActivePlanId] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [startingSession, setStartingSession] = useState(false);
+  const [finishingSession, setFinishingSession] = useState(false);
   const [savingSetKey, setSavingSetKey] = useState<string | null>(null);
   const [exerciseForms, setExerciseForms] = useState<Record<string, ExerciseFormState>>({});
-  const [recommendedWeights, setRecommendedWeights] = useState<Record<string, number | null>>({});
+  const [recommendations, setRecommendations] = useState<Record<string, Recommendation>>({});
+  const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null);
 
   const savePlan = async (userId: string, nextPlan: GeneratedPlan) => {
     setSaving(true);
@@ -209,47 +209,60 @@ export default function PlanPage() {
         await savePlan(user.id, generated);
       }
 
-      const recommendationMap: Record<string, number | null> = {};
+      const recommendationMap: Record<string, Recommendation> = {};
 
       for (const [dayIndex, dayPlan] of nextPlan.days.entries()) {
         for (const [exerciseIndex, exercise] of dayPlan.exercises.entries()) {
           const key = makeExerciseKey(dayIndex, exerciseIndex);
-          const targetRange = parseRepRange(exercise.reps);
 
-          if (!targetRange) {
-            recommendationMap[key] = null;
-            continue;
-          }
-
-          const { data: logs, error: logsError } = await supabase
+          const { data: keyLogs, error: keyLogsError } = await supabase
             .from('exercise_logs')
-            .select('session_id, weight_kg, reps, rpe, created_at')
+            .select('session_id, weight_kg, reps, rpe, created_at, exercise_key')
             .eq('user_id', user.id)
-            .eq('exercise_name', exercise.name)
+            .eq('exercise_key', exercise.exercise_key)
             .order('created_at', { ascending: false })
             .limit(30)
             .returns<ExerciseLogRow[]>();
 
-          if (logsError) {
-            setError(dbErrorMessage(logsError.message));
+          if (keyLogsError) {
+            setError(dbErrorMessage(keyLogsError.message));
             continue;
           }
 
-          const lastPerformance = getLastPerformance(logs ?? [], targetRange.min, targetRange.max);
+          let logs = keyLogs ?? [];
+          if (!logs.length) {
+            const { data: nameLogs, error: nameLogsError } = await supabase
+              .from('exercise_logs')
+              .select('session_id, weight_kg, reps, rpe, created_at, exercise_key')
+              .eq('user_id', user.id)
+              .eq('exercise_name', exercise.exercise_name)
+              .order('created_at', { ascending: false })
+              .limit(30)
+              .returns<ExerciseLogRow[]>();
+
+            if (nameLogsError) {
+              setError(dbErrorMessage(nameLogsError.message));
+              continue;
+            }
+
+            logs = nameLogs ?? [];
+          }
+
+          const lastPerformance = getLastPerformance(logs, exercise.target_reps_min, exercise.target_reps_max);
           recommendationMap[key] = recommendWeight({
             goal: nextPrefs.goal,
-            targetRepsRange: targetRange,
+            targetRepsRange: { min: exercise.target_reps_min, max: exercise.target_reps_max },
             lastWeight: lastPerformance.lastWeight,
             lastReps: lastPerformance.lastReps,
             lastRpe: lastPerformance.lastRpe,
-            equipment: inferEquipment(exercise.name),
+            equipment: exercise.equipment_type,
             failedBelowTargetMinTwice: lastPerformance.failedBelowTargetMinTwice,
             targetMaxHitTwiceRecently: lastPerformance.targetMaxHitTwiceRecently
           });
         }
       }
 
-      setRecommendedWeights(recommendationMap);
+      setRecommendations(recommendationMap);
       setLoading(false);
     };
 
@@ -257,9 +270,7 @@ export default function PlanPage() {
   }, [router]);
 
   const handleRegenerate = async () => {
-    if (!prefs) {
-      return;
-    }
+    if (!prefs) return;
 
     const {
       data: { user }
@@ -281,6 +292,7 @@ export default function PlanPage() {
 
     setPlan(nextPlan);
     setSessionId(null);
+    setSessionSummary(null);
     await savePlan(user.id, nextPlan);
   };
 
@@ -320,32 +332,99 @@ export default function PlanPage() {
       return;
     }
 
+    setSessionSummary(null);
     setSessionId(data.id);
+  };
+
+  const handleFinishWorkout = async () => {
+    if (!sessionId) return;
+
+    setFinishingSession(true);
+    setError(null);
+
+    const {
+      data: { user }
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      router.replace('/auth');
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+    const { data: updatedSession, error: endError } = await supabase
+      .from('workout_sessions')
+      .update({ ended_at: nowIso })
+      .eq('id', sessionId)
+      .eq('user_id', user.id)
+      .is('ended_at', null)
+      .select('started_at, ended_at')
+      .single<{ started_at: string; ended_at: string | null }>();
+
+    if (endError) {
+      setFinishingSession(false);
+      setError(dbErrorMessage(endError.message));
+      return;
+    }
+
+    const { data: logs, error: logsError } = await supabase
+      .from('exercise_logs')
+      .select('weight_kg, reps')
+      .eq('user_id', user.id)
+      .eq('session_id', sessionId)
+      .returns<Array<{ weight_kg: number | null; reps: number }>>();
+
+    if (logsError) {
+      setFinishingSession(false);
+      setError(dbErrorMessage(logsError.message));
+      return;
+    }
+
+    const setsCount = logs?.length ?? 0;
+    const totalVolume = (logs ?? []).reduce((sum, set) => sum + (set.weight_kg ? set.weight_kg * set.reps : 0), 0);
+    const durationMinutes = Math.max(
+      1,
+      Math.round(
+        (new Date(updatedSession.ended_at ?? nowIso).getTime() - new Date(updatedSession.started_at).getTime()) /
+          (1000 * 60)
+      )
+    );
+
+    const xpBonus = setsCount >= 6 ? 50 : 0;
+
+    if (xpBonus > 0) {
+      const { data: userStats } = await supabase.from('user_stats').select('xp').eq('user_id', user.id).maybeSingle<{ xp: number }>();
+      const nextXp = (userStats?.xp ?? 0) + xpBonus;
+      const nextLevel = xpToLevel(nextXp);
+      const { error: upsertError } = await supabase.from('user_stats').upsert({ user_id: user.id, xp: nextXp, level: nextLevel }, { onConflict: 'user_id' });
+
+      if (upsertError) {
+        setFinishingSession(false);
+        setError(dbErrorMessage(upsertError.message));
+        return;
+      }
+    }
+
+    setSessionSummary({ durationMinutes, setsCount, totalVolume, xpBonus });
+    setSessionId(null);
+    setFinishingSession(false);
   };
 
   const setExerciseForm = (key: string, updater: (prev: ExerciseFormState) => ExerciseFormState) => {
     setExerciseForms((current) => {
-      const prev =
-        current[key] ?? {
-          weightKg: '',
-          reps: '',
-          rpe: '',
-          restSeconds: null,
-          setIndex: 1
-        };
-
-      return {
-        ...current,
-        [key]: updater(prev)
-      };
+      const prev = current[key] ?? { weightKg: '', reps: '', rpe: '', restSeconds: null, setIndex: 1 };
+      return { ...current, [key]: updater(prev) };
     });
   };
 
-  const handleSaveSet = async (dayIndex: number, exerciseIndex: number, exerciseName: string, repsScheme: string) => {
+  const handleSaveSet = async (dayIndex: number, exerciseIndex: number) => {
     if (!sessionId || !plan || !prefs || !activePlanId) {
       setError('Démarre une session avant de sauvegarder des séries.');
       return;
     }
+
+    const exercise = plan.days[dayIndex]?.exercises[exerciseIndex];
+    if (!exercise) return;
 
     const {
       data: { user }
@@ -357,14 +436,7 @@ export default function PlanPage() {
     }
 
     const key = makeExerciseKey(dayIndex, exerciseIndex);
-    const form =
-      exerciseForms[key] ?? {
-        weightKg: '',
-        reps: '',
-        rpe: '',
-        restSeconds: null,
-        setIndex: 1
-      };
+    const form = exerciseForms[key] ?? { weightKg: '', reps: '', rpe: '', restSeconds: null, setIndex: 1 };
 
     const repsValue = Number(form.reps);
     if (!Number.isFinite(repsValue) || repsValue <= 0) {
@@ -372,7 +444,16 @@ export default function PlanPage() {
       return;
     }
 
-    const range = parseRepRange(repsScheme);
+    if (weightedEquipment.has(exercise.equipment_type) && !form.weightKg) {
+      const shouldContinue = window.confirm('Ce mouvement requiert une charge. Continuer sans renseigner le poids ?');
+      if (!shouldContinue) return;
+    }
+
+    if (repsValue < exercise.target_reps_min || repsValue > exercise.target_reps_max) {
+      setWarning(`⚠️ ${exercise.exercise_name}: ${repsValue} reps hors plage cible (${exercise.target_reps_min}-${exercise.target_reps_max}).`);
+    } else {
+      setWarning(null);
+    }
 
     setSavingSetKey(key);
     setError(null);
@@ -383,10 +464,12 @@ export default function PlanPage() {
       plan_id: activePlanId,
       day_index: dayIndex,
       exercise_index: exerciseIndex,
-      exercise_name: exerciseName,
+      exercise_key: exercise.exercise_key,
+      exercise_name: exercise.exercise_name,
+      equipment_type: exercise.equipment_type,
       set_index: form.setIndex,
-      target_reps_min: range?.min ?? null,
-      target_reps_max: range?.max ?? null,
+      target_reps_min: exercise.target_reps_min,
+      target_reps_max: exercise.target_reps_max,
       weight_kg: form.weightKg ? Number(form.weightKg) : null,
       reps: repsValue,
       rpe: form.rpe ? Number(form.rpe) : null,
@@ -399,11 +482,7 @@ export default function PlanPage() {
       return;
     }
 
-    const { data: userStats, error: statFetchError } = await supabase
-      .from('user_stats')
-      .select('xp')
-      .eq('user_id', user.id)
-      .maybeSingle<{ xp: number }>();
+    const { data: userStats, error: statFetchError } = await supabase.from('user_stats').select('xp').eq('user_id', user.id).maybeSingle<{ xp: number }>();
 
     if (statFetchError) {
       setSavingSetKey(null);
@@ -414,14 +493,7 @@ export default function PlanPage() {
     const nextXp = (userStats?.xp ?? 0) + 10;
     const nextLevel = xpToLevel(nextXp);
 
-    const { error: upsertError } = await supabase.from('user_stats').upsert(
-      {
-        user_id: user.id,
-        xp: nextXp,
-        level: nextLevel
-      },
-      { onConflict: 'user_id' }
-    );
+    const { error: upsertError } = await supabase.from('user_stats').upsert({ user_id: user.id, xp: nextXp, level: nextLevel }, { onConflict: 'user_id' });
 
     if (upsertError) {
       setSavingSetKey(null);
@@ -434,16 +506,11 @@ export default function PlanPage() {
   };
 
   const planDescription = useMemo(() => {
-    if (!sessionId) {
-      return 'Démarre une session pour enregistrer les séries.';
-    }
-
+    if (!sessionId) return 'Démarre une session pour enregistrer les séries.';
     return `Session en cours (${sessionId.slice(0, 8)}...)`;
   }, [sessionId]);
 
-  if (loading) {
-    return <p className="text-slate-300">Chargement du plan...</p>;
-  }
+  if (loading) return <p className="text-slate-300">Chargement du plan...</p>;
 
   return (
     <section className="space-y-6">
@@ -455,20 +522,13 @@ export default function PlanPage() {
         </div>
 
         <div className="flex flex-wrap gap-2">
-          <button
-            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-60"
-            disabled={startingSession || !activePlanId || Boolean(sessionId)}
-            onClick={handleStartSession}
-            type="button"
-          >
+          <button className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-60" disabled={startingSession || !activePlanId || Boolean(sessionId)} onClick={handleStartSession} type="button">
             {sessionId ? 'Session started' : startingSession ? 'Starting...' : 'Start session'}
           </button>
-          <button
-            className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-violet-500 disabled:opacity-60"
-            disabled={saving}
-            onClick={handleRegenerate}
-            type="button"
-          >
+          <button className="rounded-lg bg-cyan-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-cyan-600 disabled:opacity-60" disabled={!sessionId || finishingSession} onClick={handleFinishWorkout} type="button">
+            {finishingSession ? 'Finishing...' : 'Finish workout'}
+          </button>
+          <button className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-violet-500 disabled:opacity-60" disabled={saving} onClick={handleRegenerate} type="button">
             {saving ? 'Génération...' : 'Regenerate plan'}
           </button>
           <Link className="rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-sm transition hover:bg-slate-800" href="/dashboard">
@@ -478,98 +538,56 @@ export default function PlanPage() {
       </div>
 
       {error ? <p className="rounded-md border border-red-500/30 bg-red-900/20 p-2 text-sm text-red-200">{error}</p> : null}
+      {warning ? <p className="rounded-md border border-amber-500/30 bg-amber-900/20 p-2 text-sm text-amber-200">{warning}</p> : null}
+      {sessionSummary ? (
+        <div className="rounded-xl border border-cyan-500/30 bg-cyan-900/10 p-4 text-sm">
+          <h3 className="text-lg font-semibold text-cyan-200">Résumé de session</h3>
+          <p>Durée: {sessionSummary.durationMinutes} min</p>
+          <p>Séries: {sessionSummary.setsCount}</p>
+          <p>Volume total: {sessionSummary.totalVolume.toFixed(1)} kg</p>
+          <p>Bonus XP: +{sessionSummary.xpBonus}</p>
+        </div>
+      ) : null}
 
       {plan ? (
         <div className="space-y-4">
           <div className="rounded-xl border border-violet-500/30 bg-slate-900/80 p-5">
             <h3 className="text-xl font-semibold text-violet-200">{plan.title}</h3>
             <p className="mt-2 text-slate-300">Split: {plan.split}</p>
-            <div className="mt-3 flex flex-wrap gap-2 text-xs">
-              <span className="rounded-full border border-slate-700 px-3 py-1">Niveau: {plan.meta.training_level}</span>
-              <span className="rounded-full border border-slate-700 px-3 py-1">Objectif: {plan.meta.goal}</span>
-              <span className="rounded-full border border-slate-700 px-3 py-1">Lieu: {plan.meta.location}</span>
-              <span className="rounded-full border border-slate-700 px-3 py-1">Jours: {plan.meta.days_per_week}/semaine</span>
-            </div>
           </div>
 
           {plan.days.map((dayPlan, dayIndex) => (
             <article className="rounded-xl border border-slate-800 bg-slate-900/60 p-5" key={dayPlan.day + dayPlan.focus}>
-              <h4 className="text-lg font-semibold">
-                {dayPlan.day} - {dayPlan.focus}
-              </h4>
+              <h4 className="text-lg font-semibold">{dayPlan.day} - {dayPlan.focus}</h4>
               <ul className="mt-3 space-y-2 text-sm text-slate-200">
                 {dayPlan.exercises.map((exercise, exerciseIndex) => {
                   const key = makeExerciseKey(dayIndex, exerciseIndex);
-                  const form =
-                    exerciseForms[key] ?? {
-                      weightKg: '',
-                      reps: '',
-                      rpe: '',
-                      restSeconds: null,
-                      setIndex: 1
-                    };
+                  const form = exerciseForms[key] ?? { weightKg: '', reps: '', rpe: '', restSeconds: null, setIndex: 1 };
+                  const recommendation = recommendations[key];
 
                   return (
-                    <li className="rounded-md border border-slate-800 bg-slate-950/50 p-3" key={`${dayPlan.day}-${exercise.name}-${exerciseIndex}`}>
-                      <p className="font-medium">{exercise.name}</p>
-                      <p className="text-slate-400">
-                        {exercise.sets} x {exercise.reps}
-                      </p>
-                      <p className="text-xs text-emerald-300">
-                        Recommended weight:{' '}
-                        {recommendedWeights[key] === null ? 'N/A (pas assez de données)' : `${recommendedWeights[key]} kg`}
-                      </p>
+                    <li className="rounded-md border border-slate-800 bg-slate-950/50 p-3" key={`${dayPlan.day}-${exercise.exercise_key}-${exerciseIndex}`}>
+                      <p className="font-medium">{exercise.exercise_name}</p>
+                      <p className="text-slate-400">{exercise.sets} x {exercise.reps}</p>
+                      <p className="text-xs text-slate-500">equipment: {exercise.equipment_type} · key: {exercise.exercise_key}</p>
+                      <p className="text-xs text-emerald-300">Recommended reps: {recommendation?.recommendedReps ?? `${exercise.target_reps_min}-${exercise.target_reps_max}`}</p>
+                      <p className="text-xs text-emerald-300">Recommended weight: {recommendation?.recommendedWeight === null || recommendation?.recommendedWeight === undefined ? 'N/A' : `${recommendation.recommendedWeight} kg`}</p>
+                      {recommendation?.progressionNote ? <p className="text-xs text-cyan-200">{recommendation.progressionNote}</p> : null}
                       {exercise.notes ? <p className="text-xs text-slate-400">{exercise.notes}</p> : null}
 
                       <div className="mt-3 grid gap-2 md:grid-cols-4">
-                        <input
-                          className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
-                          onChange={(event) => setExerciseForm(key, (prev) => ({ ...prev, weightKg: event.target.value }))}
-                          placeholder="Poids (kg)"
-                          type="number"
-                          value={form.weightKg}
-                        />
-                        <input
-                          className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
-                          onChange={(event) => setExerciseForm(key, (prev) => ({ ...prev, reps: event.target.value }))}
-                          placeholder="Reps"
-                          type="number"
-                          value={form.reps}
-                        />
-                        <input
-                          className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
-                          onChange={(event) => setExerciseForm(key, (prev) => ({ ...prev, rpe: event.target.value }))}
-                          placeholder="RPE (optionnel)"
-                          step="0.5"
-                          type="number"
-                          value={form.rpe}
-                        />
-                        <input
-                          className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
-                          placeholder="Rest (sec)"
-                          readOnly
-                          value={form.restSeconds ?? ''}
-                        />
+                        <input className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm" onChange={(event) => setExerciseForm(key, (prev) => ({ ...prev, weightKg: event.target.value }))} placeholder="Poids (kg)" type="number" value={form.weightKg} />
+                        <input className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm" onChange={(event) => setExerciseForm(key, (prev) => ({ ...prev, reps: event.target.value }))} placeholder="Reps" type="number" value={form.reps} />
+                        <input className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm" onChange={(event) => setExerciseForm(key, (prev) => ({ ...prev, rpe: event.target.value }))} placeholder="RPE (optionnel)" step="0.5" type="number" value={form.rpe} />
+                        <input className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm" placeholder="Rest (sec)" readOnly value={form.restSeconds ?? ''} />
                       </div>
 
                       <p className="mt-2 text-xs text-slate-400">Set #{form.setIndex}</p>
-
                       <RestTimer onUseRest={(seconds) => setExerciseForm(key, (prev) => ({ ...prev, restSeconds: seconds }))} />
 
                       <div className="mt-3 flex flex-wrap gap-2">
-                        <button
-                          className="rounded-md bg-slate-700 px-3 py-1 text-xs text-white"
-                          onClick={() => setExerciseForm(key, (prev) => ({ ...prev, setIndex: prev.setIndex + 1 }))}
-                          type="button"
-                        >
-                          Add set
-                        </button>
-                        <button
-                          className="rounded-md bg-violet-700 px-3 py-1 text-xs text-white disabled:opacity-60"
-                          disabled={!sessionId || savingSetKey === key}
-                          onClick={() => handleSaveSet(dayIndex, exerciseIndex, exercise.name, exercise.reps)}
-                          type="button"
-                        >
+                        <button className="rounded-md bg-slate-700 px-3 py-1 text-xs text-white" onClick={() => setExerciseForm(key, (prev) => ({ ...prev, setIndex: prev.setIndex + 1 }))} type="button">Add set</button>
+                        <button className="rounded-md bg-violet-700 px-3 py-1 text-xs text-white disabled:opacity-60" disabled={!sessionId || savingSetKey === key} onClick={() => handleSaveSet(dayIndex, exerciseIndex)} type="button">
                           {savingSetKey === key ? 'Saving...' : 'Save set'}
                         </button>
                       </div>

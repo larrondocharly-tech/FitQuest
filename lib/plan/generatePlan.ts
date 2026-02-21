@@ -11,10 +11,16 @@ export type UserPrefs = {
   equipment: string[];
 };
 
+export type EquipmentType = 'barbell' | 'dumbbell' | 'machine' | 'bodyweight' | 'band' | 'unknown';
+
 type Exercise = {
-  name: string;
+  exercise_key: string;
+  exercise_name: string;
+  equipment_type: EquipmentType;
   sets: string;
   reps: string;
+  target_reps_min: number;
+  target_reps_max: number;
   notes?: string;
 };
 
@@ -46,6 +52,62 @@ type ExerciseLibrary = {
 };
 
 const weekdayLabels = ['Jour 1', 'Jour 2', 'Jour 3', 'Jour 4', 'Jour 5', 'Jour 6'];
+
+const slugifyExercise = (value: string): string =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+const inferEquipmentType = (exerciseName: string): EquipmentType => {
+  const lower = exerciseName.toLowerCase();
+
+  if (lower.includes('barbell') || lower.includes('ez-bar')) return 'barbell';
+  if (lower.includes('dumbbell')) return 'dumbbell';
+  if (lower.includes('machine') || lower.includes('cable') || lower.includes('lat pulldown') || lower.includes('leg press')) return 'machine';
+  if (lower.includes('band')) return 'band';
+  if (
+    lower.includes('push-up') ||
+    lower.includes('pull-up') ||
+    lower.includes('chin-up') ||
+    lower.includes('plank') ||
+    lower.includes('hollow hold') ||
+    lower.includes('bodyweight') ||
+    lower.includes('inverted row')
+  ) {
+    return 'bodyweight';
+  }
+
+  return 'unknown';
+};
+
+const parseRepRange = (reps: string): { min: number; max: number } => {
+  const numbers = reps.match(/\d+/g) ?? [];
+  if (!numbers.length) {
+    return { min: 8, max: 12 };
+  }
+
+  if (numbers.length === 1) {
+    const value = Number(numbers[0]);
+    return { min: value, max: value };
+  }
+
+  return { min: Number(numbers[0]), max: Number(numbers[1]) };
+};
+
+const makeExercise = (name: string, sets: string, reps: string, notes?: string): Exercise => {
+  const targetRange = parseRepRange(reps);
+  return {
+    exercise_key: slugifyExercise(name),
+    exercise_name: name,
+    equipment_type: inferEquipmentType(name),
+    sets,
+    reps,
+    target_reps_min: targetRange.min,
+    target_reps_max: targetRange.max,
+    notes
+  };
+};
 
 const normalizeGoal = (prefs: UserPrefs): Goal => {
   if (prefs.goal) {
@@ -155,13 +217,13 @@ const fullBodyDay = (day: string, focus: string, ex: ExerciseLibrary, goal: Goal
     day,
     focus,
     exercises: [
-      { name: ex.squat, sets: reps.compoundSets, reps: reps.compoundReps, notes: 'RPE 7-8' },
-      { name: ex.horizontalPush, sets: reps.secondarySets, reps: reps.secondaryReps },
-      { name: ex.horizontalPull, sets: reps.secondarySets, reps: reps.secondaryReps },
-      { name: ex.hinge, sets: reps.secondarySets, reps: reps.secondaryReps },
-      { name: ex.verticalPull, sets: reps.secondarySets, reps: reps.secondaryReps },
-      { name: ex.lateralRaise, sets: reps.accessorySets, reps: reps.accessoryReps },
-      { name: ex.core, sets: '3', reps: '30-45 sec', notes: reps.note }
+      makeExercise(ex.squat, reps.compoundSets, reps.compoundReps, 'RPE 7-8'),
+      makeExercise(ex.horizontalPush, reps.secondarySets, reps.secondaryReps),
+      makeExercise(ex.horizontalPull, reps.secondarySets, reps.secondaryReps),
+      makeExercise(ex.hinge, reps.secondarySets, reps.secondaryReps),
+      makeExercise(ex.verticalPull, reps.secondarySets, reps.secondaryReps),
+      makeExercise(ex.lateralRaise, reps.accessorySets, reps.accessoryReps),
+      makeExercise(ex.core, '3', '30-45 sec', reps.note)
     ]
   };
 };
@@ -173,13 +235,13 @@ const upperDay = (day: string, focus: string, ex: ExerciseLibrary, goal: Goal): 
     day,
     focus,
     exercises: [
-      { name: ex.horizontalPush, sets: reps.compoundSets, reps: reps.compoundReps, notes: 'RPE 7-8' },
-      { name: ex.verticalPull, sets: reps.secondarySets, reps: reps.secondaryReps },
-      { name: ex.verticalPush, sets: reps.secondarySets, reps: reps.secondaryReps },
-      { name: ex.horizontalPull, sets: reps.secondarySets, reps: reps.secondaryReps },
-      { name: ex.lateralRaise, sets: reps.accessorySets, reps: reps.accessoryReps },
-      { name: ex.curls, sets: reps.accessorySets, reps: reps.accessoryReps },
-      { name: ex.triceps, sets: reps.accessorySets, reps: reps.accessoryReps }
+      makeExercise(ex.horizontalPush, reps.compoundSets, reps.compoundReps, 'RPE 7-8'),
+      makeExercise(ex.verticalPull, reps.secondarySets, reps.secondaryReps),
+      makeExercise(ex.verticalPush, reps.secondarySets, reps.secondaryReps),
+      makeExercise(ex.horizontalPull, reps.secondarySets, reps.secondaryReps),
+      makeExercise(ex.lateralRaise, reps.accessorySets, reps.accessoryReps),
+      makeExercise(ex.curls, reps.accessorySets, reps.accessoryReps),
+      makeExercise(ex.triceps, reps.accessorySets, reps.accessoryReps)
     ]
   };
 };
@@ -191,11 +253,11 @@ const lowerDay = (day: string, focus: string, ex: ExerciseLibrary, goal: Goal): 
     day,
     focus,
     exercises: [
-      { name: ex.squat, sets: reps.compoundSets, reps: reps.compoundReps, notes: 'RPE 7-8' },
-      { name: ex.hinge, sets: reps.secondarySets, reps: reps.secondaryReps },
-      { name: ex.lunge, sets: reps.secondarySets, reps: reps.secondaryReps },
-      { name: 'Leg Press / Step-Up', sets: reps.secondarySets, reps: reps.secondaryReps },
-      { name: ex.core, sets: '3', reps: '30-45 sec', notes: reps.note }
+      makeExercise(ex.squat, reps.compoundSets, reps.compoundReps, 'RPE 7-8'),
+      makeExercise(ex.hinge, reps.secondarySets, reps.secondaryReps),
+      makeExercise(ex.lunge, reps.secondarySets, reps.secondaryReps),
+      makeExercise('Leg Press / Step-Up', reps.secondarySets, reps.secondaryReps),
+      makeExercise(ex.core, '3', '30-45 sec', reps.note)
     ]
   };
 };

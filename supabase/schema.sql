@@ -201,6 +201,11 @@ alter table public.user_stats
 alter table public.exercise_logs add column if not exists exercise_key text;
 alter table public.exercise_logs add column if not exists equipment_type text;
 alter table public.exercise_logs add column if not exists set_number integer not null default 1;
+alter table if exists public.exercise_logs alter column day_index set default 1;
+
+update public.exercise_logs
+set day_index = 1
+where day_index is null;
 
 update public.exercise_logs
 set exercise_name = 'Exercice'

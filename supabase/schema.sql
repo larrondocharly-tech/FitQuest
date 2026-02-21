@@ -31,6 +31,11 @@ create table if not exists public.workout_plans (
   plan jsonb not null
 );
 
+alter table public.workout_plans
+  add column if not exists cycle_week int not null default 1 check (cycle_week between 1 and 4),
+  add column if not exists cycle_start_date date not null default (current_date),
+  add column if not exists cycle_rules jsonb not null default '{}'::jsonb;
+
 create unique index if not exists workout_plans_one_active_per_user
 on public.workout_plans (user_id)
 where is_active = true;
@@ -133,6 +138,20 @@ create table if not exists public.workout_sessions (
   created_at timestamptz not null default now()
 );
 
+alter table public.workout_sessions
+  add column if not exists blueprint jsonb not null default '{}'::jsonb;
+
+create table if not exists public.weekly_quests (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  week_start date not null,
+  target_sessions int not null default 3,
+  completed_sessions int not null default 0,
+  completed boolean not null default false,
+  created_at timestamptz not null default now(),
+  unique (user_id, week_start)
+);
+
 create table if not exists public.exercise_logs (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
@@ -182,6 +201,7 @@ create index if not exists exercise_logs_user_exercise_name_created_idx
 alter table public.workout_sessions enable row level security;
 alter table public.exercise_logs enable row level security;
 alter table public.user_stats enable row level security;
+alter table public.weekly_quests enable row level security;
 
 drop policy if exists "select own workout sessions" on public.workout_sessions;
 create policy "select own workout sessions"
@@ -255,6 +275,31 @@ create policy "update own user stats"
 drop policy if exists "delete own user stats" on public.user_stats;
 create policy "delete own user stats"
   on public.user_stats
+  for delete
+  using (auth.uid() = user_id);
+
+drop policy if exists "select own weekly quests" on public.weekly_quests;
+create policy "select own weekly quests"
+  on public.weekly_quests
+  for select
+  using (auth.uid() = user_id);
+
+drop policy if exists "insert own weekly quests" on public.weekly_quests;
+create policy "insert own weekly quests"
+  on public.weekly_quests
+  for insert
+  with check (auth.uid() = user_id);
+
+drop policy if exists "update own weekly quests" on public.weekly_quests;
+create policy "update own weekly quests"
+  on public.weekly_quests
+  for update
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+drop policy if exists "delete own weekly quests" on public.weekly_quests;
+create policy "delete own weekly quests"
+  on public.weekly_quests
   for delete
   using (auth.uid() = user_id);
 

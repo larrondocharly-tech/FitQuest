@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
+import { getCycleWeek, isDeloadWeek, weekStart } from '@/lib/cycle/cycle';
 
 type Profile = {
   email: string | null;
@@ -14,6 +15,8 @@ type Profile = {
 
 type PlanSummary = {
   title: string;
+  cycle_start_date?: string;
+  cycle_week?: number;
   plan: {
     split?: string;
     meta?: {
@@ -26,6 +29,12 @@ type PlanSummary = {
 type UserStats = {
   xp: number;
   level: number;
+};
+
+type WeeklyQuestRow = {
+  completed_sessions: number;
+  target_sessions: number;
+  completed: boolean;
 };
 
 type WorkoutSessionSummary = {
@@ -47,6 +56,8 @@ export default function DashboardPage() {
   const [planSummary, setPlanSummary] = useState<PlanSummary | null>(null);
   const [stats, setStats] = useState<UserStats | null>(null);
   const [lastSession, setLastSession] = useState<WorkoutSessionSummary | null>(null);
+  const [weeklyQuest, setWeeklyQuest] = useState<WeeklyQuestRow | null>(null);
+  const [cycleWeek, setCycleWeek] = useState(1);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -74,7 +85,7 @@ export default function DashboardPage() {
 
       const { data: planData, error: planError } = await supabase
         .from('workout_plans')
-        .select('title, plan')
+        .select('title, plan, cycle_start_date, cycle_week')
         .eq('user_id', user.id)
         .eq('is_active', true)
         .maybeSingle<PlanSummary>();
@@ -108,9 +119,24 @@ export default function DashboardPage() {
         return;
       }
 
+      const currentWeekStart = weekStart(new Date()).toISOString().slice(0, 10);
+      const { data: questData, error: questError } = await supabase
+        .from('weekly_quests')
+        .select('completed_sessions, target_sessions, completed')
+        .eq('user_id', user.id)
+        .eq('week_start', currentWeekStart)
+        .maybeSingle<WeeklyQuestRow>();
+
+      if (questError) {
+        setError(dbErrorMessage(questError.message));
+        return;
+      }
+
       setPlanSummary(planData ?? null);
       setStats(statsData ?? { xp: 0, level: 1 });
       setLastSession(sessionData ?? null);
+      setWeeklyQuest(questData ?? { completed_sessions: 0, target_sessions: 3, completed: false });
+      setCycleWeek(getCycleWeek(planData?.cycle_start_date ?? new Date(), new Date()));
       setProfile({
         email: data?.email ?? user.email ?? null,
         hero_name: data?.hero_name ?? null,
@@ -159,6 +185,18 @@ export default function DashboardPage() {
         ) : (
           <p className="text-slate-300">Aucune session enregistrée.</p>
         )}
+      </div>
+
+      <div className="max-w-md rounded-xl border border-indigo-500/30 bg-slate-900/80 p-5">
+        <h3 className="mb-3 text-xl font-semibold text-indigo-200">Mesocycle</h3>
+        <p className="text-slate-300">Semaine en cours: S{cycleWeek}</p>
+        <p className="text-slate-300">Statut: {isDeloadWeek(cycleWeek) ? 'Deload' : 'Progression'}</p>
+      </div>
+
+      <div className="max-w-md rounded-xl border border-fuchsia-500/30 bg-slate-900/80 p-5">
+        <h3 className="mb-3 text-xl font-semibold text-fuchsia-200">Quête hebdomadaire</h3>
+        <p className="text-slate-300">Progression: {weeklyQuest?.completed_sessions ?? 0}/{weeklyQuest?.target_sessions ?? 3} séances</p>
+        <p className="text-slate-300">{weeklyQuest?.completed ? '✅ Quête terminée (+200 XP)' : 'En cours'}</p>
       </div>
 
       <div className="max-w-md rounded-xl border border-emerald-500/30 bg-slate-900/80 p-5">

@@ -62,7 +62,10 @@ function extractSession(json: unknown): SessionTokens | null {
       payload.session.access_token &&
       payload.session.refresh_token
     ) {
-      return payload.session;
+      return {
+        access_token: payload.session.access_token,
+        refresh_token: payload.session.refresh_token
+      };
     }
 
     return null;

@@ -28,19 +28,35 @@ L'application sera disponible sur `http://localhost:3000`.
 
 - `/auth` : connexion / inscription
 - `/dashboard` : page protégée utilisateur connecté
-- `/onboarding` : création du héros
+- `/onboarding` : création du héros + préférences d'entraînement
+- `/plan` : plan d'entraînement recommandé (génération + régénération)
 
-## Supabase SQL (profiles + RLS)
+## Supabase SQL (profiles + workout_plans + RLS)
 
 1. Ouvrez le SQL Editor de votre projet Supabase.
 2. Copiez-collez le contenu de `supabase/schema.sql`.
 3. Exécutez le script.
 
-Cela crée :
-- `public.profiles`
-- les policies RLS (select/insert/update sur son propre profil)
+Cela crée/met à jour :
+- `public.profiles` avec préférences d'entraînement (`training_level`, `goal`, `location`, `days_per_week`, `equipment`)
+- `public.workout_plans` pour stocker le plan actif et l'historique
+- les policies RLS (select/insert/update sur ses propres lignes)
 - le trigger `handle_new_user()` sur `auth.users`
-- le trigger `updated_at`
+- les triggers `updated_at`
+- un index unique partiel pour garantir un seul plan actif par utilisateur
+
+## Logique du générateur de plan
+
+Le générateur se trouve dans `lib/plan/generatePlan.ts` et applique :
+
+- Split par jours/semaine :
+  - `3` => full body
+  - `4` => upper/lower
+  - `5` => push/pull/legs + upper + accessory
+  - `6` => push/pull/legs x2
+- Choix d'exercices selon `location` et `equipment` (gym vs home)
+- Adaptation des reps/sets selon `goal` (`strength`, `muscle`, `fat_loss`, `general`)
+- Mapping Warrior : orientation par défaut sur muscle/strength (avec override possible via goal)
 
 ## Notes
 
@@ -51,13 +67,13 @@ Cela crée :
 
 ## Fix CORS cache issues
 
-Si vous voyez encore des erreurs CORS après les changements d'authentification :
+Si vous voyez encore des erreurs CORS après les changements d'authentification :
 
 1. Stop dev server
 2. Delete .next folder
 3. Restart npm run dev
 
-Exemple :
+Exemple :
 
 ```bash
 rm -rf .next

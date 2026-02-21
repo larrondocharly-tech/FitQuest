@@ -4,7 +4,6 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
-import RestTimer from '@/components/RestTimer';
 import { generatePlan, type EquipmentType, type GeneratedPlan, type Goal, type Location, type TrainingLevel, type UserPrefs } from '@/lib/plan/generatePlan';
 import { getLastPerformance, recommendWeight, type ExerciseLogForProgression, type Recommendation, xpToLevel } from '@/lib/progression/recommendWeight';
 import { getCycleWeek, weekStart } from '@/lib/cycle/cycle';
@@ -147,8 +146,37 @@ const addDays = (date: Date, days: number): Date => {
   return next;
 };
 
+const formatClock = (totalSeconds: number) => {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const mm = String(Math.floor(s / 60)).padStart(2, '0');
+  const ss = String(s % 60).padStart(2, '0');
+  return `${mm}:${ss}`;
+};
+
 const RestModal = ({ open, exerciseName, validatedSetLabel, recommendedSeconds, onNext, onClose }: RestModalProps) => {
+  const [running, setRunning] = useState(true);
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    if (!open) return;
+
+    // reset state every time modal opens
+    setRunning(true);
+    setElapsed(0);
+
+    let t: number | null = null;
+    t = window.setInterval(() => {
+      setElapsed((prev) => (running ? prev + 1 : prev));
+    }, 1000);
+
+    return () => {
+      if (t) window.clearInterval(t);
+    };
+  }, [open, running]);
+
   if (!open) return null;
+
+  const reached = elapsed >= recommendedSeconds;
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-3 sm:items-center sm:p-4">
@@ -159,17 +187,58 @@ const RestModal = ({ open, exerciseName, validatedSetLabel, recommendedSeconds, 
             <h3 className="text-lg font-semibold text-slate-100">{exerciseName}</h3>
             <p className="mt-1 text-sm text-emerald-300">{validatedSetLabel} ✅</p>
           </div>
-          {onClose ? <button aria-label="Fermer" className="rounded-md px-2 py-1 text-slate-300" onClick={onClose} type="button">✕</button> : null}
+          {onClose ? (
+            <button
+              aria-label="Fermer"
+              className="rounded-md px-2 py-1 text-slate-300"
+              onClick={onClose}
+              type="button"
+            >
+              ✕
+            </button>
+          ) : null}
         </div>
 
-        <p className="mt-2 text-sm text-slate-300">Repos conseillé: {recommendedSeconds}s</p>
-        <div className="mt-4">
-          <RestTimer defaultSeconds={recommendedSeconds} onStop={onNext} />
+        <div className="mt-3 rounded-xl border border-slate-700 bg-slate-950/60 p-4">
+          <p className="text-xs uppercase tracking-wide text-slate-400">Timer de repos</p>
+
+          <div className="mt-1 flex items-baseline justify-between">
+            <div className="text-5xl font-bold tabular-nums text-slate-100">{formatClock(elapsed)}</div>
+            <div className={`text-sm ${reached ? 'text-emerald-300' : 'text-slate-300'}`}>
+              Repos conseillé : {recommendedSeconds}s {reached ? '✅' : ''}
+            </div>
+          </div>
+
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <button
+              className="rounded-lg bg-amber-600 px-4 py-2 font-semibold text-white"
+              onClick={() => setRunning((v) => !v)}
+              type="button"
+            >
+              {running ? 'Pause' : 'Reprendre'}
+            </button>
+
+            <button
+              className="rounded-lg bg-slate-700 px-4 py-2 font-semibold text-slate-100"
+              onClick={() => setElapsed(0)}
+              type="button"
+            >
+              Reset
+            </button>
+          </div>
         </div>
 
-        <button className="mt-4 w-full rounded-lg bg-violet-700 px-4 py-3 text-base font-semibold" onClick={onNext} type="button">
+        <button
+          className="mt-4 w-full rounded-lg bg-violet-700 px-4 py-3 text-base font-semibold"
+          onClick={onNext}
+          type="button"
+        >
           Passer à la série suivante
         </button>
+
+        <p className="mt-2 text-center text-xs text-slate-400">
+          Tu peux prendre autant de repos que tu veux.
+        </p>
       </div>
     </div>
   );
@@ -601,7 +670,8 @@ export default function PlanPage() {
       reps: repsValue,
       rpe: input.rpe ? Number(input.rpe) : null,
       rest_seconds: recommendedRest,
-      set_number: setNumber
+      set_number: setNumber,
+      set_index: setNumber,
     });
 
     if (insertError) {

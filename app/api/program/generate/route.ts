@@ -172,7 +172,12 @@ export async function POST(request: Request) {
           },
           {
             role: 'user',
-            content: [{ type: 'input_text', text: `Profil utilisateur:\n${JSON.stringify(input, null, 2)}` }]
+            content: [
+              {
+                type: 'input_text',
+                text: `Profil utilisateur:\n${JSON.stringify(input, null, 2)}`
+              }
+            ]
           }
         ]
       })

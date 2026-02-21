@@ -246,6 +246,9 @@ export default function DashboardPage() {
         <Link className="mt-4 inline-flex rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500" href="/plan">
           Voir mon plan
         </Link>
+        <Link className="mt-2 inline-flex rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-500" href="/library">
+          Browse plans
+        </Link>
       </div>
 
       {!profile?.hero_name ? (

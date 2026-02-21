@@ -29,6 +29,8 @@ type PlanSummary = {
 type UserStats = {
   xp: number;
   level: number;
+  streak_current: number;
+  streak_best: number;
 };
 
 type WeeklyQuestRow = {
@@ -40,6 +42,10 @@ type WeeklyQuestRow = {
 type WorkoutSessionSummary = {
   started_at: string;
   ended_at: string | null;
+};
+
+type NextWorkoutRow = {
+  workout_date: string;
 };
 
 const dbErrorMessage = (message: string) => {
@@ -58,6 +64,7 @@ export default function DashboardPage() {
   const [lastSession, setLastSession] = useState<WorkoutSessionSummary | null>(null);
   const [weeklyQuest, setWeeklyQuest] = useState<WeeklyQuestRow | null>(null);
   const [cycleWeek, setCycleWeek] = useState(1);
+  const [nextWorkoutDate, setNextWorkoutDate] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -97,7 +104,7 @@ export default function DashboardPage() {
 
       const { data: statsData, error: statsError } = await supabase
         .from('user_stats')
-        .select('xp, level')
+        .select('xp, level, streak_current, streak_best')
         .eq('user_id', user.id)
         .maybeSingle<UserStats>();
 
@@ -132,11 +139,28 @@ export default function DashboardPage() {
         return;
       }
 
+      const today = new Date().toISOString().slice(0, 10);
+      const { data: nextWorkout, error: nextWorkoutError } = await supabase
+        .from('scheduled_workouts')
+        .select('workout_date')
+        .eq('user_id', user.id)
+        .eq('status', 'planned')
+        .gte('workout_date', today)
+        .order('workout_date', { ascending: true })
+        .limit(1)
+        .maybeSingle<NextWorkoutRow>();
+
+      if (nextWorkoutError) {
+        setError(dbErrorMessage(nextWorkoutError.message));
+        return;
+      }
+
       setPlanSummary(planData ?? null);
-      setStats(statsData ?? { xp: 0, level: 1 });
+      setStats(statsData ?? { xp: 0, level: 1, streak_current: 0, streak_best: 0 });
       setLastSession(sessionData ?? null);
       setWeeklyQuest(questData ?? { completed_sessions: 0, target_sessions: 3, completed: false });
       setCycleWeek(getCycleWeek(planData?.cycle_start_date ?? new Date(), new Date()));
+      setNextWorkoutDate(nextWorkout?.workout_date ?? null);
       setProfile({
         email: data?.email ?? user.email ?? null,
         hero_name: data?.hero_name ?? null,
@@ -172,7 +196,15 @@ export default function DashboardPage() {
         <h3 className="mb-3 text-xl font-semibold text-amber-200">Progression RPG</h3>
         <p className="text-slate-300">XP: {stats?.xp ?? 0}</p>
         <p className="text-slate-300">Level: {stats?.level ?? 1}</p>
+        <p className="text-slate-300">Streak actuel: {stats?.streak_current ?? 0}</p>
+        <p className="text-slate-300">Meilleure streak: {stats?.streak_best ?? 0}</p>
         <p className="mt-2 text-xs text-slate-400">Gagne +10 XP par série sauvegardée depuis l’écran plan.</p>
+      </div>
+
+
+      <div className="max-w-md rounded-xl border border-teal-500/30 bg-slate-900/80 p-5">
+        <h3 className="mb-3 text-xl font-semibold text-teal-200">Prochaine séance</h3>
+        <p className="text-slate-300">{nextWorkoutDate ? new Date(`${nextWorkoutDate}T00:00:00`).toLocaleDateString() : 'Aucune séance planifiée.'}</p>
       </div>
 
       <div className="max-w-md rounded-xl border border-cyan-500/30 bg-slate-900/80 p-5">

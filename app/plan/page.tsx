@@ -69,6 +69,7 @@ type UserStatsRow = {
 type ExerciseItem = {
   exercise_key: string;
   exercise_name: string;
+  displayName: string;
   equipment_type: EquipmentType;
   sets_target: number;
   target_reps_min: number;
@@ -142,8 +143,9 @@ const parseSetsTarget = (sets: string | null | undefined): number => {
   return Number.isFinite(value) && value > 0 ? value : 3;
 };
 
-const getExerciseClass = (name: string): 'poly' | 'iso' | 'other' => {
-  const normalized = name.toLowerCase();
+const getExerciseClass = (name?: string | null): 'poly' | 'iso' | 'other' => {
+  const normalized = (name ?? '').toLowerCase().trim();
+  if (!normalized) return 'other';
   if (polyKeywords.some((keyword) => normalized.includes(keyword))) return 'poly';
   if (isoKeywords.some((keyword) => normalized.includes(keyword))) return 'iso';
   return 'other';
@@ -403,9 +405,19 @@ export default function PlanPage() {
       const note = progressionNote ?? exercise.notes ?? fallback?.notes ?? null;
       const rpeTarget = note?.match(/rpe\s*([\d-]+)/i)?.[1] ?? null;
 
+      const displayName = (
+        exercise.exercise_name
+        ?? (exercise as { exerciseName?: string | null }).exerciseName
+        ?? (exercise as { name?: string | null }).name
+        ?? (exercise as { exercise_key?: string | null }).exercise_key
+        ?? (exercise as { exerciseKey?: string | null }).exerciseKey
+        ?? 'Exercice'
+      ).toString().trim() || 'Exercice';
+
       return {
         exercise_key: exercise.exercise_key,
         exercise_name: exercise.exercise_name,
+        displayName,
         equipment_type: exercise.equipment_type,
         sets_target: parseSetsTarget(exercise.sets ?? fallback?.sets),
         target_reps_min: targetMin,
@@ -421,8 +433,8 @@ export default function PlanPage() {
   const sortedSummaryItems = useMemo(() => {
     return [...workoutItems].sort((a, b) => {
       const rank = { poly: 0, iso: 1, other: 2 } as const;
-      const aRank = rank[getExerciseClass(a.exercise_name)];
-      const bRank = rank[getExerciseClass(b.exercise_name)];
+      const aRank = rank[getExerciseClass(a.displayName)];
+      const bRank = rank[getExerciseClass(b.displayName)];
       if (aRank === bRank) return a.originalIndex - b.originalIndex;
       return aRank - bRank;
     });
@@ -593,13 +605,13 @@ export default function PlanPage() {
     }
 
     if (repsValue < focusedExercise.target_reps_min || repsValue > focusedExercise.target_reps_max) {
-      setWarning(`⚠️ ${focusedExercise.exercise_name}: ${repsValue} reps hors plage cible (${focusedExercise.target_reps_min}-${focusedExercise.target_reps_max}).`);
+      setWarning(`⚠️ ${focusedExercise.displayName}: ${repsValue} reps hors plage cible (${focusedExercise.target_reps_min}-${focusedExercise.target_reps_max}).`);
     } else {
       setWarning(null);
     }
 
     const setIndex = (sessionLogsCount[focusedExercise.exercise_key] ?? 0) + 1;
-    const exerciseClass = getExerciseClass(focusedExercise.exercise_name);
+    const exerciseClass = getExerciseClass(focusedExercise.displayName);
     const restDefault = exerciseClass === 'poly' ? 120 : exerciseClass === 'iso' ? 60 : 90;
 
     setSavingSet(true);
@@ -881,7 +893,7 @@ export default function PlanPage() {
                     const focused = focusedExercise?.exercise_key === item.exercise_key;
                     return (
                       <div className="flex items-center justify-between rounded-md border border-slate-800 bg-slate-950/50 px-3 py-2" key={item.exercise_key}>
-                        <p>{item.exercise_name} — {item.sets_target} séries • {item.target_reps_min}-{item.target_reps_max} reps</p>
+                        <p>{item.displayName} — {item.sets_target} séries • {item.target_reps_min}-{item.target_reps_max} reps</p>
                         <span>{completed ? '✅' : focused ? '▶️' : '⏳'}</span>
                       </div>
                     );
@@ -903,7 +915,7 @@ export default function PlanPage() {
                         }}
                         type="button"
                       >
-                        <p className="font-medium">{item.exercise_name}</p>
+                        <p className="font-medium">{item.displayName}</p>
                         <p className="text-xs text-slate-400">{sessionLogsCount[item.exercise_key] ?? 0}/{item.sets_target} séries</p>
                       </button>
                     ))}
@@ -916,7 +928,7 @@ export default function PlanPage() {
                       <RestTimer defaultSeconds={restSecondsDefault} onStop={handleRestComplete} />
                     ) : (
                       <>
-                        <h5 className="text-xl font-semibold">{focusedExercise.exercise_name}</h5>
+                        <h5 className="text-xl font-semibold">{focusedExercise.displayName}</h5>
                         <p className="mt-1 text-sm text-slate-300">
                           Poids recommandé: {focusedExercise.recommended_weight === null ? 'N/A' : `${focusedExercise.recommended_weight} kg`} ·
                           Cible: {focusedExercise.target_reps_min}-{focusedExercise.target_reps_max} reps ·

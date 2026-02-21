@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import OpenAI from 'openai';
 
-export const runtime = 'nodejs';
+export const runtime = "nodejs";
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const BUILD_TAG = 'gen-v3-input_text-2026-02-21';
 
@@ -124,9 +127,9 @@ const extractJsonObject = (value: string) => {
   return trimmed.slice(start, end + 1);
 };
 
-const getModelText = (payload: unknown) => {
-  if (!payload || typeof payload !== 'object') return '';
-  const response = payload as { output_text?: string; output?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }> };
+const getModelText = (
+  response: OpenAI.Responses.Response
+) => {
   if (response.output_text) return response.output_text;
 
   const chunks: string[] = [];
@@ -169,12 +172,11 @@ const toInputTextMessage = (message: {
 };
 
 export async function POST(request: Request) {
-  const openAiKey = process.env.OPENAI_API_KEY;
   const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  if (!openAiKey) return NextResponse.json({ error: 'OPENAI_API_KEY manquant', build_tag: BUILD_TAG }, { status: 500 });
+  if (!process.env.OPENAI_API_KEY) return NextResponse.json({ error: 'OPENAI_API_KEY manquant', build_tag: BUILD_TAG }, { status: 500 });
   if (!supabaseUrl || !supabaseAnonKey) return NextResponse.json({ error: 'Configuration Supabase manquante', build_tag: BUILD_TAG }, { status: 500 });
 
   let diag: { build_tag: string; input_types: Array<{ role: string; types: string[] }> } = {
@@ -221,25 +223,9 @@ export async function POST(request: Request) {
       );
     }
 
-    const aiResponse = await fetch('https://api.openai.com/v1/responses', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${openAiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'gpt-4.1-mini',
-        input: inputMessages
-      })
-    });
-
-    if (!aiResponse.ok) {
-      const text = await aiResponse.text();
-      throw new Error(`Erreur OpenAI: ${text}`);
-    }
-
-    const aiPayload = (await aiResponse.json()) as unknown;
-    const text = getModelText(aiPayload);
+    const model = 'gpt-4.1-mini';
+    const resp = await openai.responses.create({ model, input: inputMessages });
+    const text = getModelText(resp);
     const plan = validatePlan(JSON.parse(extractJsonObject(text)));
 
     const bearer = request.headers.get('authorization')?.replace('Bearer ', '').trim();

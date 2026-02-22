@@ -1,8 +1,9 @@
-'use client';
+"use client";
 
-import { useEffect, useMemo, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabaseClient';
+import { useEffect, useMemo, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabaseClient";
+import BackButton from "@/components/BackButton";
 
 type Exercise = {
   name: string;
@@ -10,7 +11,7 @@ type Exercise = {
   reps: string;
   intensity: string;
   restSec: number;
-  notes?: string;
+  notes?: string | null;
 };
 
 type Session = {
@@ -18,8 +19,8 @@ type Session = {
   name: string;
   warmup: string[];
   exercises: Exercise[];
-  finisher?: string[];
-  cooldown?: string[];
+  finisher?: string[] | null;
+  cooldown?: string[] | null;
 };
 
 type WeekPlan = {
@@ -40,6 +41,7 @@ type Program = {
 export default function ProgramDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [program, setProgram] = useState<Program | null>(null);
@@ -51,13 +53,14 @@ export default function ProgramDetailPage() {
       setError(null);
 
       const {
-        data: { user }
+        data: { user },
       } = await supabase.auth.getUser();
 
-      let query = supabase.from('training_plans').select('plan_json').eq('id', params.id);
+      let query = supabase.from("training_plans").select("plan_json").eq("id", params.id);
       if (user) {
-        query = query.eq('user_id', user.id);
+        query = query.eq("user_id", user.id);
       }
+
       const { data, error: fetchError } = await query.limit(1).single();
 
       if (fetchError) {
@@ -71,9 +74,7 @@ export default function ProgramDetailPage() {
       setLoading(false);
     };
 
-    if (params.id) {
-      loadProgram();
-    }
+    if (params.id) loadProgram();
   }, [params.id]);
 
   const currentWeek = useMemo(
@@ -82,15 +83,28 @@ export default function ProgramDetailPage() {
   );
 
   if (loading) {
-    return <p>Chargement du programme...</p>;
+    return (
+      <section className="space-y-4">
+        <BackButton fallbackHref="/program" />
+        <p>Chargement du programme...</p>
+      </section>
+    );
   }
 
   if (error || !program) {
     return (
       <section className="space-y-4">
-        <p className="rounded-md border border-red-500/30 bg-red-900/20 p-3 text-red-200">{error ?? 'Programme introuvable.'}</p>
-        <button className="rounded-lg bg-slate-800 px-4 py-2" onClick={() => router.push('/program/new')} type="button">
-          Retour
+        <BackButton fallbackHref="/program" />
+        <p className="rounded-md border border-red-500/30 bg-red-900/20 p-3 text-red-200">
+          {error ?? "Programme introuvable."}
+        </p>
+
+        <button
+          className="rounded-lg bg-slate-800 px-4 py-2"
+          onClick={() => router.push("/program/new")}
+          type="button"
+        >
+          Créer un programme
         </button>
       </section>
     );
@@ -98,6 +112,11 @@ export default function ProgramDetailPage() {
 
   return (
     <section className="space-y-5">
+      {/* ✅ BOUTON RETOUR (ICI il s’affiche vraiment) */}
+      <div className="mb-2">
+        <BackButton fallbackHref="/program" />
+      </div>
+
       <div>
         <h2 className="text-3xl font-semibold">{program.title}</h2>
         <p className="mt-2 text-slate-300">{program.overview}</p>
@@ -120,11 +139,21 @@ export default function ProgramDetailPage() {
 
       {currentWeek ? (
         <div className="space-y-4">
-          <h3 className="text-xl font-semibold text-violet-300">Focus: {currentWeek.focus}</h3>
+          <h3 className="text-xl font-semibold text-violet-300">Focus : {currentWeek.focus}</h3>
+
           {currentWeek.sessions.map((session) => (
-            <article className="rounded-xl border border-slate-800 bg-slate-900/70 p-4" key={`${currentWeek.week}-${session.dayIndex}`}>
-              <h4 className="text-lg font-semibold">Jour {session.dayIndex} — {session.name}</h4>
-              <p className="mt-2 text-sm text-slate-300">Échauffement: {session.warmup.join(' • ')}</p>
+            <article
+              className="rounded-xl border border-slate-800 bg-slate-900/70 p-4"
+              key={`${currentWeek.week}-${session.dayIndex}`}
+            >
+              <h4 className="text-lg font-semibold">
+                Jour {session.dayIndex} — {session.name}
+              </h4>
+
+              <p className="mt-2 text-sm text-slate-300">
+                Échauffement : {session.warmup.join(" • ")}
+              </p>
+
               <ul className="mt-3 space-y-2 text-sm">
                 {session.exercises.map((exercise, index) => (
                   <li className="rounded-md border border-slate-800 p-2" key={`${session.name}-${index}`}>
@@ -136,8 +165,14 @@ export default function ProgramDetailPage() {
                   </li>
                 ))}
               </ul>
-              {session.finisher?.length ? <p className="mt-3 text-sm text-slate-300">Finisher: {session.finisher.join(' • ')}</p> : null}
-              {session.cooldown?.length ? <p className="mt-2 text-sm text-slate-300">Retour au calme: {session.cooldown.join(' • ')}</p> : null}
+
+              {session.finisher?.length ? (
+                <p className="mt-3 text-sm text-slate-300">Finisher : {session.finisher.join(" • ")}</p>
+              ) : null}
+
+              {session.cooldown?.length ? (
+                <p className="mt-2 text-sm text-slate-300">Retour au calme : {session.cooldown.join(" • ")}</p>
+              ) : null}
             </article>
           ))}
         </div>

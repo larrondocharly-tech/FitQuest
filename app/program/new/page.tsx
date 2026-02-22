@@ -1,12 +1,13 @@
-'use client';
+"use client";
 
-import { FormEvent, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabaseClient';
+import { FormEvent, useState } from "react";
+import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabaseClient";
+import BackButton from "@/components/BackButton";
 
 type FormState = {
-  goal: 'fat_loss' | 'muscle_gain' | 'strength' | 'recomp' | 'endurance' | 'general_fitness';
-  level: 'beginner' | 'intermediate' | 'advanced';
+  goal: "fat_loss" | "muscle_gain" | "strength" | "recomp" | "endurance" | "general_fitness";
+  level: "beginner" | "intermediate" | "advanced";
   weeks: number;
   sessionsPerWeek: number;
   equipment: string;
@@ -16,26 +17,34 @@ type FormState = {
   preferExercises: string;
 };
 
-const parseCsv = (value: string) =>
-  value
-    .split(',')
+type ApiResponse = { ok?: boolean; planId?: string; error?: string; details?: string };
+
+const parseCsv = (value?: string) =>
+  (value ?? "")
+    .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+
+function normalizeNumber(n: unknown, fallback: number) {
+  const x = typeof n === "number" ? n : Number(n);
+  return Number.isFinite(x) ? x : fallback;
+}
 
 export default function NewProgramPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
   const [form, setForm] = useState<FormState>({
-    goal: 'muscle_gain',
-    level: 'beginner',
+    goal: "muscle_gain",
+    level: "beginner",
     weeks: 8,
     sessionsPerWeek: 3,
-    equipment: 'bodyweight,dumbbells',
-    injuries: '',
-    dislikes: '',
-    focusWeakPoints: '',
-    preferExercises: ''
+    equipment: "bodyweight,dumbbells",
+    injuries: "",
+    dislikes: "",
+    focusWeakPoints: "",
+    preferExercises: "",
   });
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -45,41 +54,59 @@ export default function NewProgramPage() {
 
     try {
       const {
-        data: { session }
+        data: { session },
       } = await supabase.auth.getSession();
 
-      const response = await fetch('/api/program/generate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {})
+      const payload = {
+        weeks: normalizeNumber(form.weeks, 8),
+        profile: {
+          goal: form.goal,
+          level: form.level,
+          sessionsPerWeek: normalizeNumber(form.sessionsPerWeek, 3),
+          equipment: parseCsv(form.equipment),
+          constraints: {
+            injuries: form.injuries.trim() ? form.injuries.trim() : undefined,
+            dislikes: parseCsv(form.dislikes),
+            focusWeakPoints: parseCsv(form.focusWeakPoints),
+            preferExercises: parseCsv(form.preferExercises),
+          },
         },
-        body: JSON.stringify({
-          weeks: form.weeks,
-          profile: {
-            goal: form.goal,
-            level: form.level,
-            sessionsPerWeek: form.sessionsPerWeek,
-            equipment: parseCsv(form.equipment),
-            constraints: {
-              injuries: form.injuries || undefined,
-              dislikes: parseCsv(form.dislikes),
-              focusWeakPoints: parseCsv(form.focusWeakPoints),
-              preferExercises: parseCsv(form.preferExercises)
-            }
-          }
-        })
+      };
+
+      const response = await fetch("/api/program/generate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify(payload),
       });
 
-      const data = (await response.json()) as { ok?: boolean; planId?: string; error?: string; details?: string };
+      const contentType = response.headers.get("content-type") || "";
+      const raw = await response.text();
 
-      if (!response.ok || !data.ok || !data.planId) {
-        throw new Error(data.details || data.error || 'Impossible de générer le programme');
+      let data: ApiResponse | null = null;
+      if (contentType.includes("application/json")) {
+        try {
+          data = raw ? (JSON.parse(raw) as ApiResponse) : null;
+        } catch {
+          data = null;
+        }
+      }
+
+      if (!response.ok) {
+        const hint = data?.details || data?.error || (raw ? raw.slice(0, 300) : "Réponse vide du serveur");
+        throw new Error(`API ${response.status} ${response.statusText}: ${hint}`);
+      }
+
+      if (!data?.ok || !data.planId) {
+        const hint = data?.details || data?.error || (raw ? raw.slice(0, 300) : "Réponse vide");
+        throw new Error(hint || "Impossible de générer le programme");
       }
 
       router.push(`/program/${data.planId}`);
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : 'Erreur inattendue');
+      setError(submitError instanceof Error ? submitError.message : "Erreur inattendue");
     } finally {
       setLoading(false);
     }
@@ -87,8 +114,15 @@ export default function NewProgramPage() {
 
   return (
     <section className="mx-auto max-w-2xl space-y-6">
-      <h2 className="text-3xl font-semibold">Créer un programme IA</h2>
-      <p className="text-sm text-slate-400">Conseils généraux, pas un avis médical.</p>
+      {/* ✅ BOUTON RETOUR (au bon endroit) */}
+      <div className="mb-2">
+        <BackButton fallbackHref="/program" />
+      </div>
+
+      <div>
+        <h2 className="text-3xl font-semibold">Créer un programme IA</h2>
+        <p className="text-sm text-slate-400">Conseils généraux, pas un avis médical.</p>
+      </div>
 
       <form className="space-y-4 rounded-xl border border-slate-800 bg-slate-900/70 p-5" onSubmit={handleSubmit}>
         <div className="grid gap-4 md:grid-cols-2">
@@ -96,7 +130,7 @@ export default function NewProgramPage() {
             <span>Objectif</span>
             <select
               className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2"
-              onChange={(event) => setForm((previous) => ({ ...previous, goal: event.target.value as FormState['goal'] }))}
+              onChange={(event) => setForm((previous) => ({ ...previous, goal: event.target.value as FormState["goal"] }))}
               value={form.goal}
             >
               <option value="fat_loss">Perte de gras</option>
@@ -112,7 +146,7 @@ export default function NewProgramPage() {
             <span>Niveau</span>
             <select
               className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2"
-              onChange={(event) => setForm((previous) => ({ ...previous, level: event.target.value as FormState['level'] }))}
+              onChange={(event) => setForm((previous) => ({ ...previous, level: event.target.value as FormState["level"] }))}
               value={form.level}
             >
               <option value="beginner">Débutant</option>
@@ -193,8 +227,12 @@ export default function NewProgramPage() {
 
         {error ? <p className="rounded-md border border-red-500/30 bg-red-900/20 p-2 text-sm text-red-200">{error}</p> : null}
 
-        <button className="rounded-lg bg-violet-600 px-4 py-2 font-semibold text-white transition hover:bg-violet-500" disabled={loading} type="submit">
-          {loading ? 'Génération en cours...' : 'Générer mon programme'}
+        <button
+          className="rounded-lg bg-violet-600 px-4 py-2 font-semibold text-white transition hover:bg-violet-500"
+          disabled={loading}
+          type="submit"
+        >
+          {loading ? "Génération en cours..." : "Générer mon programme"}
         </button>
       </form>
     </section>

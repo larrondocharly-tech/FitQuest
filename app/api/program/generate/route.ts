@@ -173,7 +173,6 @@ function toInputTextMessage(message: { role: "developer" | "user"; content: unkn
 export async function POST(request: Request) {
   const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   const openaiKey = process.env.OPENAI_API_KEY;
 
@@ -360,16 +359,17 @@ export async function POST(request: Request) {
       global: { headers: bearer ? { Authorization: `Bearer ${bearer}` } : undefined },
     });
 
-    let userId: string | null = null;
-    if (bearer) {
-      const { data } = await supabaseForAuth.auth.getUser(bearer);
-      userId = data?.user?.id ?? null;
+    const {
+      data: { user }
+    } = await supabaseForAuth.auth.getUser(bearer);
+
+    const userId = user?.id ?? null;
+    if (!userId) {
+      return NextResponse.json({ ok: false, error: 'Non authentifié' }, { status: 401 });
     }
 
-    const writeClient = userId ? supabaseForAuth : serviceRoleKey ? createClient(supabaseUrl, serviceRoleKey) : supabaseForAuth;
-
-    const { data, error } = await writeClient
-      .from("training_plans")
+    const { data, error } = await supabaseForAuth
+      .from('training_plans')
       .insert({
         user_id: userId,
         title: plan.title,
@@ -382,6 +382,16 @@ export async function POST(request: Request) {
       .single();
 
     if (error) throw new Error(error.message);
+
+    const { error: stateError } = await supabaseForAuth.from('user_program_state').upsert(
+      {
+        user_id: userId,
+        active_plan_id: data.id
+      },
+      { onConflict: 'user_id' }
+    );
+
+    if (stateError) throw new Error(stateError.message);
 
     return NextResponse.json({ ok: true, planId: data.id, plan });
   } catch (error) {

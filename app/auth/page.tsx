@@ -11,6 +11,8 @@ function prettyAuthError(msg?: string) {
   if (m.includes("invalid login credentials")) return "Email ou mot de passe incorrect.";
   if (m.includes("email not confirmed")) return "Email non confirmé. Vérifie tes emails.";
   if (m.includes("user already registered")) return "Un compte existe déjà avec cet email.";
+  if (m.includes("password should be at least")) return "Le mot de passe est trop court.";
+  if (m.includes("network") || m.includes("fetch")) return "Impossible de contacter le serveur. Réessaie.";
   return msg || "Une erreur est survenue. Réessaie.";
 }
 
@@ -23,15 +25,26 @@ export default function AuthPage() {
   const [info, setInfo] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // ✅ Auto redirect si déjà connecté
   useEffect(() => {
+    console.log("[ENV]", {
+      hasUrl: !!process.env.NEXT_PUBLIC_SUPABASE_URL,
+      hasAnon: !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+    });
+
     const boot = async () => {
-      const { data } = await supabase.auth.getSession();
-      if (data.session) router.replace("/dashboard");
+      const { data, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError) {
+        console.error("[auth] getSession error", sessionError.message);
+        return;
+      }
+      if (data.session) {
+        router.replace("/dashboard");
+      }
     };
     boot();
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      console.log("[auth] state change", event, { hasSession: !!session });
       if (session) router.replace("/dashboard");
     });
 
@@ -46,7 +59,8 @@ export default function AuthPage() {
       .maybeSingle();
 
     if (profileError) {
-      setError(profileError.message);
+      console.error("[auth] profile lookup error", profileError.message);
+      setError("Connexion réussie, mais impossible de charger le profil. Réessaie.");
       return;
     }
 
@@ -54,7 +68,13 @@ export default function AuthPage() {
   };
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
+    console.log("[auth] handleSubmit", { tab, email });
     e.preventDefault();
+
+    if (loading) {
+      return;
+    }
+
     setLoading(true);
     setError(null);
     setInfo(null);
@@ -65,35 +85,38 @@ export default function AuthPage() {
           email,
           password,
           options: {
-            // ✅ marche en local et prod automatiquement
             emailRedirectTo: `${window.location.origin}/auth/callback`,
           },
         });
 
         if (signUpError) {
+          console.error("[auth] signup error", signUpError.message);
           setError(prettyAuthError(signUpError.message));
           return;
         }
 
-        // Selon la config Supabase, data.session peut être null tant que l’email n’est pas confirmé
         if (!data.session) {
           setInfo("Vérifie tes emails pour confirmer ton compte, puis reconnecte-toi.");
           return;
         }
 
-        // Si session existe (selon config), on redirige
         const userId = data.user?.id;
-        if (userId) await redirectFromProfileState(userId);
+        if (userId) {
+          await redirectFromProfileState(userId);
+          return;
+        }
+
+        router.replace("/dashboard");
         return;
       }
 
-      // LOGIN
       const { data, error: loginError } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
 
       if (loginError) {
+        console.error("[auth] login error", loginError.message);
         setError(prettyAuthError(loginError.message));
         return;
       }
@@ -105,8 +128,9 @@ export default function AuthPage() {
       }
 
       await redirectFromProfileState(userId);
-    } catch {
-      setError("Impossible de contacter le serveur. Réessaie.");
+    } catch (err) {
+      console.error("[auth] submit fatal", err);
+      setError(prettyAuthError((err as Error | undefined)?.message));
     } finally {
       setLoading(false);
     }
@@ -177,6 +201,7 @@ export default function AuthPage() {
           <button
             className="w-full rounded-lg bg-violet-600 px-4 py-2 font-semibold text-white transition hover:bg-violet-500 disabled:opacity-60"
             disabled={loading}
+            onClick={() => console.log("[auth] submit click", { tab, email })}
             type="submit"
           >
             {loading ? "Chargement..." : tab === "login" ? "Se connecter" : "S'inscrire"}

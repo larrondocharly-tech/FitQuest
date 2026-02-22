@@ -1,7 +1,9 @@
+import { NextResponse } from "next/server";
+
 export const runtime = "nodejs";
 
 export async function GET() {
-  return Response.json({
+  return NextResponse.json({
     ok: true,
     app: "FitQuest",
     version: "2026-02-21-openai-fix",

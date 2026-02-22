@@ -1,15 +1,26 @@
-export type Locale = "fr"; // plus tard: "fr" | "en"
+export type Locale = 'fr';
 
-export const t = (locale: Locale) => {
-  const dict = {
-    fr: {
-      back: "Retour",
-      week: "Semaine",
-      focus: "Focus",
-      generate: "Générer mon programme",
-      creatingProgram: "Créer un programme",
-    },
-  } as const;
-
-  return dict[locale];
+type TranslationTree = {
+  goalLabels: Record<string, string>;
+  levelLabels: Record<string, string>;
 };
+
+const translations: Record<Locale, TranslationTree> = {
+  fr: {
+    goalLabels: {
+      fat_loss: 'Perte de gras',
+      muscle_gain: 'Prise de muscle',
+      strength: 'Force',
+      recomp: 'Recomposition corporelle',
+      endurance: 'Endurance',
+      general_fitness: 'Forme générale'
+    },
+    levelLabels: {
+      beginner: 'Débutant',
+      intermediate: 'Intermédiaire',
+      advanced: 'Avancé'
+    }
+  }
+};
+
+export const t = (locale: Locale): TranslationTree => translations[locale];
